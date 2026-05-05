@@ -1,12 +1,12 @@
 // =============================================
-// FaR-Rmacia - App Logic v3.1
+// FaR-Rmacia - App Logic v3.0
 // CORRECCIONES:
-// 1) PDF de pedidos con jsPDF+html2canvas (funciona en móvil)
+// 1) PDF de pedidos (mismo aspecto que el móvil)
 // 2) Archivos historial abribles en móvil (IndexedDB)
-// 3) Sync inteligente al arrancar
-// 4) Toast sync visible en cualquier pantalla (fixed global)
-// 5) Botón borrar en historial de pedidos
-// 6) Sincronización en tiempo real (polling 30s + Firestore Listen API)
+// 3) Sync inteligente: al arrancar SIEMPRE
+//    descarga Firebase si local está vacío o
+//    Firebase es más nuevo. Nunca sobreescribe
+//    Firebase con datos vacíos.
 // =============================================
 
 // ===== FIREBASE CONFIG =====
@@ -231,9 +231,9 @@ function scheduleAutoSync() {
       const bar = document.getElementById('sync-status-bar');
       if (bar) {
         bar.style.display = 'flex';
-        bar.className = 'sync-ok';
+        bar.className = 'sync-bar';
         bar.innerHTML = `☁️ <span>Guardado en la nube · ${new Date().toLocaleTimeString('es-ES')}</span>`;
-        setTimeout(() => { bar.style.display = 'none'; }, 3000);
+        setTimeout(() => bar.style.display = 'none', 3000);
       }
     }
   }, 5000);
@@ -292,7 +292,7 @@ function actualizarIndicadorSync(ok) {
   if (ok) { bar.style.display = 'none'; }
   else {
     bar.style.display = 'flex';
-    bar.className = 'sync-error';
+    bar.className = 'sync-bar error';
     bar.innerHTML = `❌ <span>Sin conexión — cambios guardados localmente</span>`;
   }
 }
@@ -421,72 +421,81 @@ function nextId() {
 // ===== GENERACIÓN PDF PEDIDO =================
 // =============================================
 function generarPDFPedido(numPedido, fecha, filas) {
-  showToast('⏳ Generando PDF...', 'info');
+  const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"/>
+<title>Pedido ${numPedido}</title>
+<style>
+@page{size:A4 portrait;margin:18mm 14mm}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:13px;color:#222;background:#fff}
+.cabecera{border-bottom:3px solid #2D8B57;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:flex-end}
+.cab-left .titulo{font-size:24px;font-weight:900;color:#1F4E79;letter-spacing:-0.5px}
+.cab-left .num{font-size:15px;font-weight:700;color:#2D8B57;margin-top:4px}
+.cab-left .sub{font-size:12px;color:#777;margin-top:2px}
+.cab-right{text-align:right;font-size:12px;color:#777}
+table{width:100%;border-collapse:collapse;margin-top:4px}
+thead tr{background:#1F4E79;color:#fff}
+thead th{padding:10px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
+thead th.c{text-align:center}
+tbody tr:nth-child(even) td{background:#f4f8fc}
+tbody td{padding:9px 12px;border-bottom:1px solid #e8e8e8;font-size:13px}
+.qty{background:#fffde7!important;font-weight:900;color:#555;text-align:center;font-size:14px}
+.tot{font-weight:900;text-align:center}
+.dias{color:#2D8B57;font-weight:700;font-size:12px}
+.stk{text-align:center}
+.resumen{margin-top:22px;background:#f0f8ef;border-radius:8px;padding:12px 16px}
+.resumen h3{font-size:11px;font-weight:900;color:#1F4E79;text-transform:uppercase;margin-bottom:8px;letter-spacing:.4px}
+.rrow{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px dotted #ccc}
+.rrow:last-child{border-bottom:none}
+.pie{margin-top:20px;padding-top:10px;border-top:1px solid #ddd;font-size:10px;color:#aaa;display:flex;justify-content:space-between}
+</style></head><body>
+<div class="cabecera">
+  <div class="cab-left">
+    <div class="titulo">💊 FaR-Rmacia</div>
+    <div class="num">Nº Pedido: ${numPedido}</div>
+    <div class="sub">Resumen de Pedido a Farmacia</div>
+  </div>
+  <div class="cab-right">Fecha: ${fecha}<br>Impreso: ${new Date().toLocaleString('es-ES')}</div>
+</div>
+<table>
+  <thead><tr>
+    <th>Medicamento</th>
+    <th class="c">A pedir</th>
+    <th class="c">Stock actual</th>
+    <th class="c">Total tras pedido</th>
+    <th>Meses / Días</th>
+  </tr></thead>
+  <tbody>
+    ${filas.map(f => `<tr>
+      <td>${f.nombre}</td>
+      <td class="qty">${f.qty}</td>
+      <td class="stk">${f.stockActual}</td>
+      <td class="tot">${f.stockTras}</td>
+      <td class="dias">${f.diasTras} días &nbsp;|&nbsp; ${f.mesesTras} mes.</td>
+    </tr>`).join('')}
+  </tbody>
+</table>
+<div class="resumen">
+  <h3>📋 Resumen rápido</h3>
+  ${filas.map(f => `<div class="rrow"><span>${f.nombre}</span><span>Pedir <strong>${f.qty}</strong> bote(s) → <strong>${f.diasTras}</strong> días (${f.mesesTras} mes.)</span></div>`).join('')}
+</div>
+<div class="pie">
+  <span>FaR-Rmacia · Gestión de medicamentos personales</span>
+  <span>${numPedido}</span>
+</div>
+<script>window.onload=function(){window.print();window.onafterprint=function(){window.close()};}<\/script>
+</body></html>`;
 
-  const wrapper = document.createElement('div');
-  wrapper.id = '_pdf-render-area';
-  wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:white;font-family:Arial,sans-serif;font-size:13px;color:#222;padding:30px 28px;box-sizing:border-box;';
-  wrapper.innerHTML = `
-    <div style="border-bottom:3px solid #27AE60;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:flex-end">
-      <div>
-        <div style="font-size:24px;font-weight:900;color:#1F4E79;letter-spacing:-0.5px">FaR-Rmacia</div>
-        <div style="font-size:15px;font-weight:700;color:#27AE60;margin-top:4px">Nº Pedido: ${numPedido}</div>
-        <div style="font-size:12px;color:#777;margin-top:2px">Resumen de Pedido a Farmacia</div>
-      </div>
-      <div style="text-align:right;font-size:12px;color:#777">Fecha: ${fecha}<br>Generado: ${new Date().toLocaleString('es-ES')}</div>
-    </div>
-    <table style="width:100%;border-collapse:collapse;margin-top:4px">
-      <thead>
-        <tr style="background:#1F4E79;color:#fff">
-          <th style="padding:10px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase">Medicamento</th>
-          <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase">A pedir</th>
-          <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase">Stock actual</th>
-          <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase">Total tras pedido</th>
-          <th style="padding:10px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase">Meses / Dias</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${filas.map((f,i) => `<tr style="${i%2===1?'background:#f4f8fc':''}">
-          <td style="padding:9px 12px;border-bottom:1px solid #e8e8e8">${f.nombre}</td>
-          <td style="padding:9px 12px;border-bottom:1px solid #e8e8e8;background:#fffde7;font-weight:900;color:#555;text-align:center;font-size:14px">${f.qty}</td>
-          <td style="padding:9px 12px;border-bottom:1px solid #e8e8e8;text-align:center">${f.stockActual}</td>
-          <td style="padding:9px 12px;border-bottom:1px solid #e8e8e8;font-weight:900;text-align:center">${f.stockTras}</td>
-          <td style="padding:9px 12px;border-bottom:1px solid #e8e8e8;color:#27AE60;font-weight:700;font-size:12px">${f.diasTras} dias | ${f.mesesTras} mes.</td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
-    <div style="margin-top:22px;background:#f0f8ef;border-radius:8px;padding:12px 16px">
-      <div style="font-size:11px;font-weight:900;color:#1F4E79;text-transform:uppercase;margin-bottom:8px;letter-spacing:.4px">Resumen rapido</div>
-      ${filas.map(f=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px dotted #ccc"><span>${f.nombre}</span><span>Pedir <strong>${f.qty}</strong> bote(s) → <strong>${f.diasTras}</strong> dias (${f.mesesTras} mes.)</span></div>`).join('')}
-    </div>
-    <div style="margin-top:20px;padding-top:10px;border-top:1px solid #ddd;font-size:10px;color:#aaa;display:flex;justify-content:space-between">
-      <span>FaR-Rmacia - Gestion de medicamentos personales</span>
-      <span>${numPedido}</span>
-    </div>`;
-  document.body.appendChild(wrapper);
-
-  try {
-    await _cargarLibsPDF();
-    const canvas = await html2canvas(wrapper, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-    const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pW = pdf.internal.pageSize.getWidth();
-    const pH = pdf.internal.pageSize.getHeight();
-    const ratio = canvas.height / canvas.width;
-    const imgH = pW * ratio;
-    pdf.addImage(imgData, 'JPEG', 0, 0, pW, imgH <= pH ? imgH : pH);
-    const fname = numPedido + '_resumen.pdf';
-    pdf.save(fname);
-    showToast('PDF guardado correctamente', 'success');
-  } catch(err) {
-    console.error('Error generando PDF:', err);
-    showToast('Error al generar PDF: ' + err.message, 'error');
-  } finally {
-    if (document.body.contains(wrapper)) document.body.removeChild(wrapper);
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const w    = window.open(url, '_blank', 'width=860,height=960');
+  if (!w) {
+    // Pop-ups bloqueados → descargar
+    Object.assign(document.createElement('a'), { href: url, download: numPedido + '_resumen.html' }).click();
+    showToast('📄 Guardado como HTML — ábrelo para imprimir/PDF', 'info');
   }
+  setTimeout(() => URL.revokeObjectURL(url), 20000);
 }
-
 
 // =============================================
 // ===== GESTOS SWIPE ==========================
@@ -823,23 +832,14 @@ function renderHistorialPedidos() {
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-size:16px;font-weight:900;color:var(--azul-oscuro)">📋 ${numP}</div>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;gap:6px;align-items:center">
           <div style="font-size:11px;color:#999">${g.fecha}</div>
           <button class="btn-sm btn-sm-verde" onclick="generarPDFPedidoHistorial('${numP}')">📄 PDF</button>
           <button class="btn-sm btn-sm-azul"  onclick="compartirPedidoHistorial('${numP}')">📤</button>
-          <button class="btn-sm btn-sm-rojo"  onclick="borrarPedidoHistorial('${numP}')">🗑️</button>
         </div>
       </div>
       ${g.items.map(it=>`<div class="historial-item"><div class="historial-item-med">💊 ${it.medicamento}</div><div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap"><span class="badge badge-amarillo">Pedido: ${it.botes_pedidos}</span><span class="badge badge-verde">Total: ${Math.round(it.botes_total*100)/100}</span>${it.dias_restantes_tras_pedido?`<span class="badge badge-azul">${it.dias_restantes_tras_pedido} días</span>`:''}</div></div>`).join('')}
     </div>`).join('');
-}
-
-function borrarPedidoHistorial(numPedido) {
-  showConfirm('🗑️ Borrar pedido', `¿Eliminar el pedido ${numPedido} del historial?`, () => {
-    DB.set('historial_pedidos', DB.get('historial_pedidos',[]).filter(h => h.num_pedido !== numPedido));
-    showToast('Pedido eliminado del historial', 'error');
-    renderHistorialPedidos();
-  });
 }
 
 function generarPDFPedidoHistorial(numPedido) {
@@ -1096,45 +1096,6 @@ function verificarAlertas() {
 }
 
 // =============================================
-// ===== SINCRONIZACIÓN EN TIEMPO REAL =========
-// =============================================
-// Usa polling cada 30 segundos. Cuando Firebase
-// tiene un timestamp más nuevo que el local,
-// descarga los datos automáticamente y refresca
-// la pantalla actual sin interrumpir al usuario.
-// =============================================
-let _rtSyncTimer = null;
-
-function iniciarSyncTiempoReal() {
-  if (_rtSyncTimer) return; // ya arrancado
-  _rtSyncTimer = setInterval(async () => {
-    // No interrumpir si hay una sync en marcha o si acabamos de subir datos
-    if (syncInProgress) return;
-    const pendiente = localStorage.getItem('farrmacia_pendingSync') === 'true';
-    if (pendiente) return; // hay cambios locales sin subir aún, no sobreescribir
-    try {
-      const tsFirebase = await getFirebaseTimestamp();
-      if (!tsFirebase) return;
-      const tsLocal = localStorage.getItem('farrmacia_localModified');
-      if (tsLocal && tsFirebase > tsLocal) {
-        // Firebase tiene datos más nuevos → descargar silenciosamente
-        await syncFromFirebase(true);
-        // Refrescar la pantalla actual
-        navigate(currentScreen);
-        cargarCitasMini();
-        const bar = document.getElementById('sync-status-bar');
-        if (bar) {
-          bar.style.display = 'flex';
-          bar.className = 'sync-ok';
-          bar.innerHTML = `🔄 <span>Datos actualizados desde otro dispositivo · ${new Date().toLocaleTimeString('es-ES')}</span>`;
-          setTimeout(() => { bar.style.display = 'none'; }, 4000);
-        }
-      }
-    } catch(e) { /* sin conexión, ignorar silenciosamente */ }
-  }, 30000); // cada 30 segundos
-}
-
-// =============================================
 // ===== INIT ==================================
 // =============================================
 document.addEventListener('DOMContentLoaded', async () => {
@@ -1160,9 +1121,4 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 4. Service Worker PWA
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
-
-  // 5. Sincronización en tiempo real (polling 30s)
-  //    Si tienes la app abierta en otro dispositivo y ese dispositivo
-  //    hace cambios, en máximo 30 segundos este dispositivo los descarga.
-  iniciarSyncTiempoReal();
 });
