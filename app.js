@@ -360,85 +360,158 @@ function initDBLocal() {
 function nextId() { const n=DB.get('nextId',100)+1; localStorage.setItem('farrmacia_nextId',JSON.stringify(n)); return n; }
 
 // =============================================
-// ===== PDF PEDIDO — MÓVIL COMPATIBLE =========
+// ===== PDF PEDIDO — jsPDF (móvil + PC) =======
 // =============================================
-// En móvil window.open/print no funciona bien.
-// Detectamos si es móvil y en ese caso usamos
-// el sistema de compartir nativo con texto
-// formateado. En PC abrimos la ventana de impresión.
+// Usa jsPDF para generar un PDF real en el
+// navegador, funciona en Android y PC.
+// El PDF se descarga/abre directamente.
 // =============================================
 function esMobile() { return /Android|iPhone|iPad/i.test(navigator.userAgent); }
 
-function generarPDFPedido(numPedido, fecha, filas) {
-  if (esMobile()) {
-    // Móvil: compartir como texto formateado
-    const txt = `═══════════════════════════\n` +
-      `💊 FaR-Rmacia — PEDIDO\n` +
-      `Nº: ${numPedido}\n` +
-      `Fecha: ${fecha}\n` +
-      `═══════════════════════════\n\n` +
-      `Medicamento           Pedir  Stock  Total  Meses\n` +
-      `${'─'.repeat(52)}\n` +
-      filas.map(f =>
-        `${f.nombre.substring(0,20).padEnd(20)}  ${String(f.qty).padStart(5)}  ${String(f.stockActual).padStart(5)}  ${String(f.stockTras).padStart(5)}  ${f.mesesTras} mes.`
-      ).join('\n') +
-      `\n\n${'─'.repeat(52)}\n` +
-      filas.map(f => `• ${f.nombre}: pedir ${f.qty} → ${f.diasTras} días (${f.mesesTras} mes.)`).join('\n');
+async function cargarJsPDF() {
+  if (window.jspdf) return window.jspdf.jsPDF;
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    s.onload = () => resolve(window.jspdf.jsPDF);
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
 
-    if (navigator.share) {
-      navigator.share({ title: 'Pedido Farmacia ' + numPedido, text: txt });
+async function generarPDFPedido(numPedido, fecha, filas) {
+  showToast('⏳ Generando PDF...', 'info');
+  try {
+    const jsPDF = await cargarJsPDF();
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    const verde  = [61, 170, 110];
+    const azulO  = [26, 82, 118];
+    const gris   = [120, 120, 120];
+    const negro  = [34, 34, 34];
+    const amarillo = [255, 253, 176];
+
+    // ── Cabecera ──
+    doc.setFillColor(...verde);
+    doc.rect(0, 0, 210, 22, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18); doc.setFont('helvetica', 'bold');
+    doc.text('FaR-Rmacia', 14, 10);
+    doc.setFontSize(9); doc.setFont('helvetica', 'normal');
+    doc.text('Resumen de Pedido a Farmacia', 14, 16);
+    doc.text(fecha, 196, 10, { align: 'right' });
+    doc.text('Impreso: ' + new Date().toLocaleString('es-ES'), 196, 16, { align: 'right' });
+
+    // ── Nº Pedido ──
+    doc.setTextColor(...azulO);
+    doc.setFontSize(13); doc.setFont('helvetica', 'bold');
+    doc.text('N\u00BA Pedido: ' + numPedido, 14, 30);
+    doc.setDrawColor(...verde);
+    doc.setLineWidth(0.5);
+    doc.line(14, 32, 196, 32);
+
+    // ── Tabla cabecera ──
+    let y = 38;
+    const cols = [70, 20, 22, 22, 52]; // anchos columnas
+    const headers = ['Medicamento', 'Pedir', 'Stock', 'Total', 'Meses / D\u00edas'];
+    const startX = 14;
+
+    doc.setFillColor(...azulO);
+    doc.rect(startX, y, 182, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+    let cx = startX + 2;
+    headers.forEach((h, i) => {
+      doc.text(h, cx, y + 5.5);
+      cx += cols[i];
+    });
+
+    // ── Filas ──
+    y += 8;
+    filas.forEach((f, idx) => {
+      const rowH = 10;
+      // Fondo alterno
+      if (idx % 2 === 0) {
+        doc.setFillColor(240, 250, 245);
+        doc.rect(startX, y, 182, rowH, 'F');
+      }
+      // Fondo amarillo en columna "Pedir"
+      doc.setFillColor(...amarillo);
+      doc.rect(startX + cols[0], y, cols[1], rowH, 'F');
+
+      doc.setTextColor(...negro);
+      doc.setFontSize(9); doc.setFont('helvetica', 'normal');
+
+      // Texto nombre (puede ser largo)
+      const nomCorto = f.nombre.length > 32 ? f.nombre.substring(0, 30) + '...' : f.nombre;
+      doc.text(nomCorto, startX + 2, y + 6.5);
+
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...azulO);
+      doc.text(String(f.qty), startX + cols[0] + cols[1]/2, y + 6.5, { align: 'center' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...negro);
+      doc.text(String(f.stockActual), startX + cols[0] + cols[1] + cols[2]/2, y + 6.5, { align: 'center' });
+
+      doc.setFont('helvetica', 'bold');
+      doc.text(String(f.stockTras), startX + cols[0] + cols[1] + cols[2] + cols[3]/2, y + 6.5, { align: 'center' });
+
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...verde);
+      doc.text(f.diasTras + ' d\u00edas | ' + f.mesesTras + ' mes.', startX + cols[0] + cols[1] + cols[2] + cols[3] + 2, y + 6.5);
+
+      // Línea separadora
+      doc.setDrawColor(213, 238, 226);
+      doc.line(startX, y + rowH, startX + 182, y + rowH);
+      y += rowH;
+    });
+
+    // ── Resumen ──
+    y += 8;
+    doc.setFillColor(240, 250, 245);
+    doc.rect(startX, y, 182, 8 + filas.length * 7, 'F');
+    doc.setDrawColor(...verde);
+    doc.rect(startX, y, 182, 8 + filas.length * 7);
+    doc.setTextColor(...azulO);
+    doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+    doc.text('RESUMEN', startX + 4, y + 6);
+    y += 10;
+    filas.forEach(f => {
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(...negro);
+      const nom = f.nombre.length > 28 ? f.nombre.substring(0,26)+'...' : f.nombre;
+      doc.text(`\u2022 ${nom}: pedir ${f.qty} bote(s) \u2192 ${f.diasTras} d\u00edas (${f.mesesTras} mes.)`, startX + 4, y);
+      y += 7;
+    });
+
+    // ── Pie ──
+    doc.setTextColor(...gris);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.text('FaR-Rmacia \u00b7 Gesti\u00f3n de medicamentos personales', 14, 285);
+    doc.text(numPedido, 196, 285, { align: 'right' });
+
+    // ── Guardar / compartir ──
+    const pdfBlob = doc.output('blob');
+    const pdfNombre = numPedido + '_resumen.pdf';
+
+    if (esMobile() && navigator.share && navigator.canShare?.({ files: [new File([pdfBlob], pdfNombre, { type: 'application/pdf' })] })) {
+      // Android: compartir el PDF directamente (WhatsApp, Drive, etc.)
+      const file = new File([pdfBlob], pdfNombre, { type: 'application/pdf' });
+      await navigator.share({ files: [file], title: 'Pedido ' + numPedido });
     } else {
-      navigator.clipboard.writeText(txt).then(() => showToast('📋 Informe copiado'));
+      // PC o móvil sin share: descargar (Android lo abre con el visor de PDF)
+      const url = URL.createObjectURL(pdfBlob);
+      const a = document.createElement('a');
+      a.href = url; a.download = pdfNombre;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+      showToast('📄 PDF generado');
     }
-    return;
+  } catch (err) {
+    console.error('PDF error:', err);
+    showToast('⚠️ Error al generar PDF: ' + err.message, 'error');
   }
-
-  // PC/portátil: abrir ventana con HTML para imprimir/guardar PDF
-  const html = `<!DOCTYPE html>
-<html lang="es"><head><meta charset="UTF-8"/>
-<title>Pedido ${numPedido}</title>
-<style>
-@page{size:A4 portrait;margin:18mm 14mm}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,sans-serif;font-size:13px;color:#222;background:#fff}
-.cabecera{border-bottom:3px solid #3DAA6E;padding-bottom:14px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:flex-end}
-.titulo{font-size:24px;font-weight:900;color:#1A5276}
-.num{font-size:15px;font-weight:700;color:#3DAA6E;margin-top:4px}
-.sub{font-size:12px;color:#777;margin-top:2px}
-.cab-right{text-align:right;font-size:12px;color:#777}
-table{width:100%;border-collapse:collapse;margin-top:4px}
-thead tr{background:#1A5276;color:#fff}
-thead th{padding:10px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase}
-thead th.c{text-align:center}
-tbody tr:nth-child(even) td{background:#f0faf5}
-tbody td{padding:9px 12px;border-bottom:1px solid #d5eee2;font-size:13px}
-.qty{background:#fffde7!important;font-weight:900;color:#555;text-align:center;font-size:14px}
-.tot{font-weight:900;text-align:center}
-.dias{color:#3DAA6E;font-weight:700;font-size:12px}
-.stk{text-align:center}
-.resumen{margin-top:22px;background:#f0faf5;border-radius:8px;padding:12px 16px}
-.resumen h3{font-size:11px;font-weight:900;color:#1A5276;text-transform:uppercase;margin-bottom:8px}
-.rrow{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px dotted #ccc}
-.rrow:last-child{border-bottom:none}
-.pie{margin-top:20px;padding-top:10px;border-top:1px solid #ddd;font-size:10px;color:#aaa;display:flex;justify-content:space-between}
-</style></head><body>
-<div class="cabecera">
-  <div><div class="titulo">💊 FaR-Rmacia</div><div class="num">Nº Pedido: ${numPedido}</div><div class="sub">Resumen de Pedido a Farmacia</div></div>
-  <div class="cab-right">Fecha: ${fecha}<br>Impreso: ${new Date().toLocaleString('es-ES')}</div>
-</div>
-<table>
-  <thead><tr><th>Medicamento</th><th class="c">A pedir</th><th class="c">Stock actual</th><th class="c">Total</th><th>Meses / Días</th></tr></thead>
-  <tbody>${filas.map(f=>`<tr><td>${f.nombre}</td><td class="qty">${f.qty}</td><td class="stk">${f.stockActual}</td><td class="tot">${f.stockTras}</td><td class="dias">${f.diasTras} días | ${f.mesesTras} mes.</td></tr>`).join('')}</tbody>
-</table>
-<div class="resumen"><h3>📋 Resumen</h3>${filas.map(f=>`<div class="rrow"><span>${f.nombre}</span><span>Pedir <strong>${f.qty}</strong> → <strong>${f.diasTras}</strong> días (${f.mesesTras} mes.)</span></div>`).join('')}</div>
-<div class="pie"><span>FaR-Rmacia · Gestión de medicamentos personales</span><span>${numPedido}</span></div>
-<script>window.onload=function(){window.print();window.onafterprint=function(){window.close()}}<\/script>
-</body></html>`;
-  const blob = new Blob([html],{type:'text/html;charset=utf-8'});
-  const url  = URL.createObjectURL(blob);
-  const w    = window.open(url,'_blank','width=860,height=960');
-  if (!w) { Object.assign(document.createElement('a'),{href:url,download:numPedido+'_resumen.html'}).click(); showToast('📄 Descargado — ábrelo para imprimir','info'); }
-  setTimeout(()=>URL.revokeObjectURL(url),20000);
 }
 
 // ── Swipe ──
@@ -559,7 +632,7 @@ function mostrarResumenPedido(numPedido,fecha,items){
   const filas=items.map(it=>{const dt=it.tomaDia>0&&it.unidBote>0?Math.floor((it.dosisActuales+it.qty*it.unidBote)/it.tomaDia):0;return{nombre:it.nombre,qty:it.qty,stockActual:Math.round(it.botesCalc*10)/10,stockTras:Math.round((it.botesCalc+it.qty)*10)/10,diasTras:dt,mesesTras:(dt/30).toFixed(1)};});
   const tabla=`<table class="resumen-table"><thead><tr><th>Medicamento</th><th style="text-align:center">Pedir</th><th style="text-align:center">Stock</th><th style="text-align:center">Total</th><th>Meses/Días</th></tr></thead><tbody>${filas.map(f=>`<tr><td>${f.nombre}</td><td class="qty-cell">${f.qty}</td><td style="text-align:center">${f.stockActual}</td><td style="text-align:center;font-weight:900">${f.stockTras}</td><td class="dias-cell">${f.diasTras} días | ${f.mesesTras} mes.</td></tr>`).join('')}</tbody></table>`;
   const mo=document.createElement('div');mo.className='modal-overlay';
-  mo.innerHTML=`<div class="modal-sheet"><div class="modal-handle"></div><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><div class="modal-title" style="margin-bottom:0">📋 ${numPedido}</div><span style="font-size:11px;color:#999">${fecha}</span></div><p style="font-size:12px;color:#999;margin-bottom:10px">Resumen de Pedido a Farmacia</p>${tabla}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px"><button class="btn-primary" style="margin-top:0;font-size:13px" id="btn-pdf-mo">📄 ${esMobile()?'Compartir informe':'Generar PDF'}</button><button class="btn-primary" style="margin-top:0;background:var(--azul);font-size:13px" id="btn-comp-mo">📤 Compartir texto</button></div><button class="btn-secondary" style="margin-top:8px" onclick="this.closest('.modal-overlay').remove()">Cerrar</button></div>`;
+  mo.innerHTML=`<div class="modal-sheet"><div class="modal-handle"></div><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><div class="modal-title" style="margin-bottom:0">📋 ${numPedido}</div><span style="font-size:11px;color:#999">${fecha}</span></div><p style="font-size:12px;color:#999;margin-bottom:10px">Resumen de Pedido a Farmacia</p>${tabla}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px"><button class="btn-primary" style="margin-top:0;font-size:13px" id="btn-pdf-mo">📄 Generar PDF</button><button class="btn-primary" style="margin-top:0;background:var(--azul);font-size:13px" id="btn-comp-mo">📤 Compartir texto</button></div><button class="btn-secondary" style="margin-top:8px" onclick="this.closest('.modal-overlay').remove()">Cerrar</button></div>`;
   mo._filas=filas;document.body.appendChild(mo);
   document.getElementById('btn-pdf-mo').onclick=()=>generarPDFPedido(numPedido,fecha,filas);
   document.getElementById('btn-comp-mo').onclick=()=>{const txt=`PEDIDO ${numPedido}\n${fecha}\n\n`+filas.map(f=>`${f.nombre}: pedir ${f.qty} → total ${f.stockTras} (${f.diasTras} días / ${f.mesesTras} mes.)`).join('\n');if(navigator.share)navigator.share({title:'Pedido '+numPedido,text:txt});else navigator.clipboard.writeText(txt).then(()=>showToast('📋 Copiado'));};
@@ -579,7 +652,7 @@ function renderHistorialPedidos(){
         <div style="font-size:15px;font-weight:900;color:var(--azul-oscuro)">📋 ${numP}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <span style="font-size:11px;color:#999">${g.fecha}</span>
-          <button class="btn-sm btn-sm-verde" onclick="generarPDFPedidoHistorial('${numP}')">📄 ${esMobile()?'Compartir':'PDF'}</button>
+          <button class="btn-sm btn-sm-verde" onclick="generarPDFPedidoHistorial('${numP}')">📄 PDF</button>
           <button class="btn-sm btn-sm-azul"  onclick="compartirPedidoHistorial('${numP}')">📤</button>
           <button class="btn-sm btn-sm-rojo"  onclick="borrarPedidoHistorial('${numP}')">🗑️</button>
         </div>
