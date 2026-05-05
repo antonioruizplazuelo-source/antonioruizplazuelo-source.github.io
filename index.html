@@ -14,19 +14,20 @@
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet"/>
   <style>
     :root {
-      --verde: #2D8B57;
-      --verde-vivo: #42B072;
-      --fondo: #F3F0F7;
+      --verde: #27AE60;
+      --verde-vivo: #2ECC71;
+      --verde-claro: #A9DFBF;
+      --fondo: #F0FAF4;
       --azul: #5DADE2;
       --rojo: #E74C3C;
       --amarillo: #CCFF00;
       --blanco: #ffffff;
-      --gris-claro: #EBF5FB;
+      --gris-claro: #E8F8F0;
       --gris-texto: #5D6D7E;
       --azul-oscuro: #1F4E79;
       --naranja: #D35400;
       --morado: #7B2FBE;
-      --sombra: 0 4px 20px rgba(0,0,0,0.12);
+      --sombra: 0 4px 20px rgba(0,0,0,0.10);
       --radio: 18px;
       --radio-grande: 28px;
     }
@@ -38,13 +39,13 @@
     
     /* ===== HEADER ===== */
     #header {
-      background: linear-gradient(135deg, var(--verde) 0%, var(--verde-vivo) 100%);
+      background: linear-gradient(135deg, #1E8449 0%, var(--verde) 50%, var(--verde-vivo) 100%);
       color: white;
       padding: 12px 16px 10px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      box-shadow: 0 2px 12px rgba(45,139,87,0.4);
+      box-shadow: 0 2px 16px rgba(39,174,96,0.45);
       flex-shrink: 0;
       position: relative;
       z-index: 10;
@@ -120,7 +121,7 @@
     /* ===== MENÚ PRINCIPAL ===== */
     #screen-menu { padding: 0; }
     .menu-hero {
-      background: linear-gradient(160deg, #1a5e38 0%, var(--verde) 50%, var(--verde-vivo) 100%);
+      background: linear-gradient(160deg, #145A32 0%, #1E8449 35%, var(--verde) 65%, var(--verde-vivo) 100%);
       padding: 30px 20px 24px;
       text-align: center;
       color: white;
@@ -514,7 +515,25 @@
     .historial-item-num { font-size: 13px; font-weight: 900; color: var(--azul-oscuro); }
     .historial-item-med { font-size: 12px; color: #555; }
 
-    /* ===== SYNC STATUS ===== */
+    /* ===== SYNC STATUS GLOBAL (fixed, visible en cualquier pantalla) ===== */
+    #sync-status-bar {
+      position: fixed;
+      top: 68px; left: 12px; right: 12px;
+      z-index: 200;
+      border-radius: 10px;
+      padding: 8px 14px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px; font-weight: 700;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      animation: slideDown 0.3s ease;
+    }
+    @keyframes slideDown { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+    #sync-status-bar.sync-ok { background: #d5f5e3; border: 1px solid #82e0aa; color: #1E8449; }
+    #sync-status-bar.sync-error { background: #fde8e8; border: 1px solid #ef9a9a; color: var(--rojo); }
+
+    /* ===== SYNC STATUS viejo (dentro de screen-menu, ya no se usa) ===== */
     .sync-bar {
       background: #e8f5e9; border: 1px solid #a5d6a7;
       border-radius: 10px; padding: 8px 14px;
@@ -590,41 +609,70 @@
     <!-- MENÚ PRINCIPAL -->
     <div id="screen-menu" class="screen active">
       <div class="menu-hero">
-        <!-- Lazo morado SVG inline -->
+        <!-- Lazo morado SVG inline realista -->
         <svg class="lazo-hero" viewBox="0 0 100 120" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" style="stop-color:#9B59B6;stop-opacity:1" />
-              <stop offset="100%" style="stop-color:#6C3483;stop-opacity:1" />
+            <linearGradient id="lg-base" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#9B3EC8"/>
+              <stop offset="40%" style="stop-color:#7B2FBE"/>
+              <stop offset="100%" style="stop-color:#5A1A8A"/>
             </linearGradient>
-            <linearGradient id="lg2" x1="100%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" style="stop-color:#AF7AC5;stop-opacity:1" />
-              <stop offset="100%" style="stop-color:#7D3C98;stop-opacity:1" />
+            <linearGradient id="lg-brillo" x1="0%" y1="0%" x2="60%" y2="100%">
+              <stop offset="0%" style="stop-color:#C87FE8;stop-opacity:0.9"/>
+              <stop offset="50%" style="stop-color:#9B3EC8;stop-opacity:0.4"/>
+              <stop offset="100%" style="stop-color:#5A1A8A;stop-opacity:0"/>
             </linearGradient>
+            <linearGradient id="lg-cola-izq" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#8B35BE"/>
+              <stop offset="100%" style="stop-color:#5A1A8A"/>
+            </linearGradient>
+            <linearGradient id="lg-cola-der" x1="100%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" style="stop-color:#A855D4"/>
+              <stop offset="100%" style="stop-color:#6B22A0"/>
+            </linearGradient>
+            <linearGradient id="lg-borde" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" style="stop-color:#E8C0F8;stop-opacity:0.8"/>
+              <stop offset="100%" style="stop-color:#E8C0F8;stop-opacity:0"/>
+            </linearGradient>
+            <filter id="sombra-lazo">
+              <feDropShadow dx="2" dy="3" stdDeviation="3" flood-color="#3A0060" flood-opacity="0.4"/>
+            </filter>
           </defs>
-          <!-- Lazo izquierdo -->
-          <path d="M50 45 Q20 10 15 30 Q10 50 50 55" fill="url(#lg1)" opacity="0.95"/>
-          <path d="M50 45 Q22 12 18 32 Q14 48 50 55" fill="url(#lg2)" opacity="0.5"/>
-          <!-- Lazo derecho -->
-          <path d="M50 45 Q80 10 85 30 Q90 50 50 55" fill="url(#lg1)" opacity="0.95"/>
-          <path d="M50 45 Q78 12 82 32 Q86 48 50 55" fill="url(#lg2)" opacity="0.5"/>
-          <!-- Nudo central -->
-          <ellipse cx="50" cy="50" rx="7" ry="7" fill="#8E44AD"/>
-          <!-- Cola izquierda -->
-          <path d="M44 56 Q30 80 25 110" stroke="url(#lg1)" stroke-width="9" fill="none" stroke-linecap="round"/>
-          <path d="M45 57 Q31 81 26 111" stroke="url(#lg2)" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.5"/>
-          <!-- Cola derecha -->
-          <path d="M56 56 Q70 80 75 110" stroke="url(#lg1)" stroke-width="9" fill="none" stroke-linecap="round"/>
-          <path d="M55 57 Q69 81 74 111" stroke="url(#lg2)" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.5"/>
+          <g filter="url(#sombra-lazo)">
+            <!-- Borde blanco suave (simula el material) -->
+            <path d="M50 48 Q16 6 12 28 Q8 50 50 57" fill="white" opacity="0.25"/>
+            <path d="M50 48 Q84 6 88 28 Q92 50 50 57" fill="white" opacity="0.18"/>
+            <!-- Lazo izquierdo - cuerpo -->
+            <path d="M50 48 Q18 8 13 30 Q9 52 50 57" fill="url(#lg-base)"/>
+            <!-- Lazo izquierdo - brillo -->
+            <path d="M50 48 Q22 10 17 28 Q14 44 38 52" fill="url(#lg-brillo)" opacity="0.7"/>
+            <!-- Lazo izquierdo - borde claro -->
+            <path d="M50 48 Q18 8 13 30" fill="none" stroke="url(#lg-borde)" stroke-width="1.5" opacity="0.6"/>
+            <!-- Lazo derecho - cuerpo -->
+            <path d="M50 48 Q82 8 87 30 Q91 52 50 57" fill="url(#lg-cola-der)"/>
+            <!-- Lazo derecho - brillo -->
+            <path d="M50 48 Q78 10 83 28 Q86 44 62 52" fill="url(#lg-brillo)" opacity="0.5"/>
+            <!-- Lazo derecho - borde claro -->
+            <path d="M50 48 Q82 8 87 30" fill="none" stroke="url(#lg-borde)" stroke-width="1.2" opacity="0.5"/>
+            <!-- Nudo central con volumen -->
+            <ellipse cx="50" cy="52" rx="8" ry="7" fill="#5A1A8A"/>
+            <ellipse cx="50" cy="52" rx="8" ry="7" fill="url(#lg-brillo)" opacity="0.5"/>
+            <ellipse cx="47" cy="50" rx="3.5" ry="2.5" fill="white" opacity="0.25"/>
+            <!-- Cola izquierda -->
+            <path d="M43 58 Q31 80 26 110 Q28 112 34 110 Q38 88 48 63 Z" fill="url(#lg-base)"/>
+            <path d="M43 58 Q32 80 27 110" fill="none" stroke="url(#lg-brillo)" stroke-width="3" opacity="0.6" stroke-linecap="round"/>
+            <!-- Cola derecha -->
+            <path d="M57 58 Q69 80 74 110 Q72 112 66 110 Q62 88 52 63 Z" fill="url(#lg-cola-der)"/>
+            <path d="M57 58 Q68 80 73 110" fill="none" stroke="url(#lg-brillo)" stroke-width="2.5" opacity="0.5" stroke-linecap="round"/>
+          </g>
         </svg>
         <div class="menu-logo">FaR-<span>Rmacia</span></div>
-        <div class="menu-subtitle">Tu farmacia personal siempre contigo 💜</div>
+        <div class="menu-subtitle">Tu farmacia personal siempre contigo</div>
       </div>
       <div class="citas-strip">
         <div class="citas-strip-title">📅 Próximas citas</div>
         <div id="citas-mini-list"><span class="sin-citas">Sin citas próximas</span></div>
       </div>
-      <div id="sync-status-bar" style="display:none;margin:10px 16px 0"></div>
       <div class="menu-grid">
         <div class="menu-card" onclick="navigate('medicamentos')">
           <span class="menu-card-icon">💊</span>
@@ -835,7 +883,10 @@
     </div>
   </div>
 
-  <!-- BOTTOM NAV -->
+<!-- SYNC STATUS BAR GLOBAL (fixed, visible en cualquier pantalla) -->
+<div id="sync-status-bar"></div>
+
+<!-- BOTTOM NAV -->
   <nav id="bottom-nav">
     <button class="nav-btn active" data-nav="menu" onclick="navigate('menu')">
       <span class="nav-icon">🏠</span>Inicio
