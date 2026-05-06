@@ -16,7 +16,6 @@ const FIREBASE_CONFIG = {
   appId: "1:462585209909:web:e093a33ebae8c9fe6fbd7c"
 };
 const FIREBASE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
-const USER_ID = 'antonio';
 
 // ── IndexedDB (archivos binarios locales) ──
 let idbDb = null;
@@ -43,13 +42,194 @@ async function idbDelete(id) {
   return new Promise((res,rej) => { const tx=db.transaction(IDB_STORE,'readwrite'); tx.objectStore(IDB_STORE).delete(id); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
 }
 
-// ── DB localStorage ──
+// ── PERFILES DE USUARIO ──
+// Cada perfil tiene: id, nombre, modo ('local'|'firebase'), firebaseUserId
+// El perfil activo se guarda en localStorage['farrmacia_perfil_activo']
+
+function getPerfilActivo() {
+  try { return JSON.parse(localStorage.getItem('farrmacia_perfil_activo')); } catch { return null; }
+}
+function setPerfilActivo(p) { localStorage.setItem('farrmacia_perfil_activo',JSON.stringify(p)); }
+function getPerfiles() {
+  try { return JSON.parse(localStorage.getItem('farrmacia_perfiles'))||[]; } catch { return []; }
+}
+function setPerfiles(ps) { localStorage.setItem('farrmacia_perfiles',JSON.stringify(ps)); }
+
+// Prefijo de claves localStorage para el perfil activo
+function dbKey(key) {
+  const p=getPerfilActivo();
+  const prefix=p?`farrmacia_${p.id}_`:'farrmacia_';
+  return prefix+key;
+}
+
+// ── DB localStorage (con soporte multi-perfil) ──
 const DB = {
-  get(key,def=[]) { try { return JSON.parse(localStorage.getItem('farrmacia_'+key))??def; } catch { return def; } },
-  set(key,val) { localStorage.setItem('farrmacia_'+key,JSON.stringify(val)); localStorage.setItem('farrmacia_localModified',new Date().toISOString()); scheduleAutoSync(); },
-  setRaw(key,val) { localStorage.setItem('farrmacia_'+key,JSON.stringify(val)); }
+  get(key,def=[]) { try { return JSON.parse(localStorage.getItem(dbKey(key)))??def; } catch { return def; } },
+  set(key,val) { localStorage.setItem(dbKey(key),JSON.stringify(val)); localStorage.setItem(dbKey('localModified'),new Date().toISOString()); scheduleAutoSync(); },
+  setRaw(key,val) { localStorage.setItem(dbKey(key),JSON.stringify(val)); }
 };
-function estaVacioLocal() { return localStorage.getItem('farrmacia_meds')===null; }
+function estaVacioLocal() { return localStorage.getItem(dbKey('meds'))===null; }
+
+// USER_ID dinámico según perfil activo
+function getUserId() {
+  const p=getPerfilActivo();
+  return (p&&p.firebaseUserId)?p.firebaseUserId:'antonio';
+}
+function getModo() {
+  const p=getPerfilActivo();
+  return p?p.modo:'firebase';
+}
+
+// ── Gestor de perfiles ──
+function abrirGestorPerfiles() {
+  const perfiles=getPerfiles();
+  const activo=getPerfilActivo();
+  const modal=document.createElement('div');modal.className='modal-overlay';
+  modal.innerHTML=`
+    <div class="modal-sheet" style="max-height:90dvh">
+      <div class="modal-handle"></div>
+      <div class="modal-title">👤 Perfiles de Usuario</div>
+      <div style="font-size:12px;background:#e8f5ff;border-radius:10px;padding:10px;margin-bottom:14px;color:#1A5276;line-height:1.6">
+        💡 Cada perfil tiene sus propios datos. Puedes usar un perfil en local (sin Firebase) o sincronizado en la nube.
+      </div>
+      <div id="perfiles-list-modal" style="margin-bottom:14px">
+        ${perfiles.length===0?'<div style="color:#aaa;text-align:center;padding:10px;font-size:13px">No hay perfiles creados</div>':perfiles.map(p=>`
+          <div style="display:flex;align-items:center;gap:10px;padding:10px;background:${activo&&activo.id===p.id?'#d4f5e2':'#f5f5f5'};border-radius:12px;margin-bottom:8px">
+            <div style="flex:1">
+              <div style="font-weight:900;font-size:15px;color:var(--azul-oscuro)">${p.nombre}${activo&&activo.id===p.id?' <span style="color:var(--verde);font-size:11px">● Activo</span>':''}</div>
+              <div style="font-size:11px;color:#888">${p.modo==='firebase'?'☁️ Firebase: '+p.firebaseUserId:'💾 Solo local'}</div>
+            </div>
+            ${activo&&activo.id===p.id?'':
+              `<button class="btn-sm btn-sm-verde" onclick="cambiarPerfil('${p.id}');this.closest('.modal-overlay').remove()">Usar</button>`}
+            <button class="btn-sm btn-sm-rojo" onclick="borrarPerfil('${p.id}');renderPerfilesModal()">🗑️</button>
+          </div>`).join('')}
+      </div>
+      <button class="btn-primary" style="font-size:14px" onclick="crearNuevoPerfil(this.closest('.modal-overlay'))">➕ Nuevo Perfil</button>
+      <button class="btn-secondary" style="margin-top:8px" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
+}
+
+function crearNuevoPerfil(modalPadre) {
+  const mo=document.createElement('div');mo.className='modal-overlay';
+  mo.style.zIndex='600';
+  mo.innerHTML=`
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title">➕ Nuevo Perfil</div>
+      <div class="form-group">
+        <label class="form-label">Nombre del perfil</label>
+        <input type="text" class="form-input" id="np-nombre" placeholder="Ej: Antonio, Mi hijo, Mamá"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Modo</label>
+        <select class="form-input" id="np-modo" onchange="toggleFirebaseFields()" style="padding:12px">
+          <option value="local">💾 Solo local (sin nube)</option>
+          <option value="firebase">☁️ Sincronizado con Firebase</option>
+        </select>
+      </div>
+      <div id="np-firebase-fields" style="display:none">
+        <div style="background:#e8f5ff;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:#1A5276;line-height:1.7">
+          <strong>Para sincronizar con Firebase necesitas:</strong><br>
+          1️⃣ Ir a <a href="https://console.firebase.google.com" target="_blank" style="color:var(--azul)">console.firebase.google.com</a><br>
+          2️⃣ Abrir el proyecto <strong>far-rmacia</strong><br>
+          3️⃣ Ir a Firestore Database → Datos<br>
+          4️⃣ Crear documento en colección <strong>usuarios</strong><br>
+          5️⃣ El ID del documento es tu nombre de usuario (ej: <em>maria</em>)<br>
+          6️⃣ Escribe ese mismo ID abajo 👇
+        </div>
+        <div class="form-group">
+          <label class="form-label">ID de usuario Firebase</label>
+          <input type="text" class="form-input" id="np-fbid" placeholder="Ej: maria, hijo, mama"/>
+        </div>
+        <div style="background:#fff9c4;border-radius:8px;padding:10px;font-size:12px;color:#555;margin-bottom:10px">
+          💡 <strong>Compartir datos con otra persona:</strong> si tú y tu mujer queréis ver los mismos datos, usad el <em>mismo ID Firebase</em> (ej: ambos ponen <em>antonio</em>).
+        </div>
+      </div>
+      <button class="btn-primary" onclick="guardarNuevoPerfil()">💾 Crear Perfil</button>
+      <button class="btn-secondary" style="margin-top:8px" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+    </div>`;
+  document.body.appendChild(mo);
+  mo.addEventListener('click',e=>{if(e.target===mo)mo.remove();});
+}
+
+function toggleFirebaseFields(){
+  const modo=document.getElementById('np-modo')?.value;
+  const ff=document.getElementById('np-firebase-fields');
+  if(ff)ff.style.display=modo==='firebase'?'block':'none';
+}
+
+function guardarNuevoPerfil(){
+  const nombre=document.getElementById('np-nombre')?.value.trim();
+  if(!nombre){showToast('⚠️ Escribe un nombre','error');return;}
+  const modo=document.getElementById('np-modo')?.value||'local';
+  const fbid=document.getElementById('np-fbid')?.value.trim()||'';
+  if(modo==='firebase'&&!fbid){showToast('⚠️ Escribe el ID de Firebase','error');return;}
+  const perfiles=getPerfiles();
+  const id='perfil_'+Date.now();
+  perfiles.push({id,nombre,modo,firebaseUserId:fbid});
+  setPerfiles(perfiles);
+  document.querySelectorAll('.modal-overlay').forEach(m=>m.remove());
+  showToast(`✅ Perfil "${nombre}" creado`);
+  // Preguntar si cambiar a este perfil
+  showConfirm(`👤 Usar "${nombre}"`,`¿Cambiar a este perfil ahora?`,()=>cambiarPerfil(id));
+}
+
+async function cambiarPerfil(id){
+  const perfiles=getPerfiles();
+  const p=perfiles.find(x=>x.id===id);
+  if(!p)return;
+  setPerfilActivo(p);
+  mostrarSpinnerInicio(true);
+  // Si el perfil es firebase, sincronizar
+  if(p.modo==='firebase'&&estaVacioLocal()){
+    await syncFromFirebase(true).catch(()=>{});
+  }
+  mostrarSpinnerInicio(false);
+  showToast(`👤 Perfil: ${p.nombre}`,'info');
+  navigate('menu');
+  cargarCitasMini();
+  verificarAlertas();
+}
+
+function borrarPerfil(id){
+  const activo=getPerfilActivo();
+  if(activo&&activo.id===id){showToast('⚠️ No puedes borrar el perfil activo','error');return;}
+  showConfirm('🗑️ Borrar perfil','¿Eliminar este perfil? Los datos locales de este perfil se borrarán.',()=>{
+    const perfiles=getPerfiles().filter(p=>p.id!==id);
+    setPerfiles(perfiles);
+    // Borrar datos locales del perfil
+    const keys=Object.keys(localStorage).filter(k=>k.startsWith('farrmacia_'+id+'_'));
+    keys.forEach(k=>localStorage.removeItem(k));
+    showToast('Perfil eliminado','error');
+    abrirGestorPerfiles();
+  });
+}
+
+function renderPerfilesModal(){
+  document.querySelectorAll('.modal-overlay').forEach(m=>m.remove());
+  abrirGestorPerfiles();
+}
+
+// ── INIT perfiles: si no existe perfil activo, crear uno por defecto ──
+function initPerfiles() {
+  let perfiles=getPerfiles();
+  let activo=getPerfilActivo();
+  if(!activo){
+    if(perfiles.length===0){
+      // Crear perfil por defecto (antonio, firebase) para compatibilidad
+      const defaultPerfil={id:'perfil_default',nombre:'Antonio',modo:'firebase',firebaseUserId:'antonio'};
+      perfiles=[defaultPerfil];
+      setPerfiles(perfiles);
+      activo=defaultPerfil;
+    } else {
+      activo=perfiles[0];
+    }
+    setPerfilActivo(activo);
+  }
+}
+
 
 // ── Firestore helpers ──
 function fsVal(v) {
@@ -77,8 +257,9 @@ function parseFsVal(v) {
 let syncInProgress=false, syncTimer=null, pollTimer=null;
 
 async function getFirebaseTimestamp() {
+  if(getModo()==='local') return null;
   try {
-    const r = await fetch(`${FIREBASE_BASE}/usuarios/${USER_ID}?mask.fieldPaths=ultimaSincro`);
+    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}?mask.fieldPaths=ultimaSincro`);
     if (!r.ok) return null;
     const j = await r.json();
     return j.fields?.ultimaSincro ? parseFsVal(j.fields.ultimaSincro) : null;
@@ -89,6 +270,7 @@ async function getFirebaseTimestamp() {
 // Los archivos del historial se incluyen como base64 en Firebase
 // (solo los que caben — máx ~800KB por archivo para no superar límite Firestore 1MB/doc)
 async function syncToFirebase(silencioso=false) {
+  if (getModo()==='local') return true; // modo local: no sincronizar
   if (syncInProgress) return false;
   syncInProgress=true;
   document.getElementById('btn-sync')?.classList.add('syncing');
@@ -120,10 +302,10 @@ async function syncToFirebase(silencioso=false) {
     };
     const fields={};
     for (const k in data) fields[k]=fsVal(data[k]);
-    const r = await fetch(`${FIREBASE_BASE}/usuarios/${USER_ID}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
+    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
     if (!r.ok) throw new Error('HTTP '+r.status);
-    localStorage.setItem('farrmacia_lastSync',data.ultimaSincro);
-    localStorage.removeItem('farrmacia_pendingSync');
+    localStorage.setItem(dbKey('lastSync'),data.ultimaSincro);
+    localStorage.removeItem(dbKey('pendingSync'));
     if (!silencioso) showToast('☁️ Sincronizado','success');
     showSyncToastGlobal('☁️ Guardado en la nube · '+new Date().toLocaleTimeString('es-ES'));
     actualizarIndicadorSync(true);
@@ -142,11 +324,12 @@ async function syncToFirebase(silencioso=false) {
 
 // ── Descargar de Firebase ──
 async function syncFromFirebase(silencioso=false) {
+  if (getModo()==='local') return false; // modo local: no sincronizar
   if (syncInProgress) return false;
   syncInProgress=true;
   document.getElementById('btn-sync')?.classList.add('syncing');
   try {
-    const r = await fetch(`${FIREBASE_BASE}/usuarios/${USER_ID}`);
+    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}`);
     if (!r.ok) throw new Error('HTTP '+r.status);
     const j = await r.json();
     if (!j.fields) throw new Error('Sin datos');
@@ -172,10 +355,10 @@ async function syncFromFirebase(silencioso=false) {
     }
 
     if (data.ultimaSincro) {
-      localStorage.setItem('farrmacia_lastSync',data.ultimaSincro);
-      localStorage.setItem('farrmacia_localModified',data.ultimaSincro);
+      localStorage.setItem(dbKey('lastSync'),data.ultimaSincro);
+      localStorage.setItem(dbKey('localModified'),data.ultimaSincro);
     }
-    localStorage.removeItem('farrmacia_pendingSync');
+    localStorage.removeItem(dbKey('pendingSync'));
     if (!silencioso) showToast('✅ Datos restaurados','success');
     actualizarIndicadorSync(true);
     navigate(currentScreen); cargarCitasMini();
@@ -192,7 +375,8 @@ async function syncFromFirebase(silencioso=false) {
 
 // ── Auto-sync 5s tras cambio ──
 function scheduleAutoSync() {
-  localStorage.setItem('farrmacia_pendingSync','true');
+  if (getModo()==='local') return; // modo local: no sincronizar
+  localStorage.setItem(dbKey('pendingSync'),'true');
   if (syncTimer) clearTimeout(syncTimer);
   syncTimer = setTimeout(()=>syncToFirebase(true), 5000);
 }
@@ -201,12 +385,11 @@ function scheduleAutoSync() {
 function iniciarPolling() {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
-    if (syncInProgress) return;
+    if (syncInProgress||getModo()==='local') return;
     const tsFirebase = await getFirebaseTimestamp().catch(()=>null);
     if (!tsFirebase) return;
-    const tsLocal = localStorage.getItem('farrmacia_localModified');
+    const tsLocal = localStorage.getItem(dbKey('localModified'));
     if (tsLocal && tsFirebase > tsLocal) {
-      // Otro dispositivo subió datos más nuevos → descargar silenciosamente
       await syncFromFirebase(true);
       showToast('☁️ Datos actualizados desde otro dispositivo','info');
     }
@@ -217,13 +400,14 @@ function iniciarPolling() {
 async function syncInteligente() {
   mostrarSpinnerInicio(true);
   try {
+    if (getModo()==='local') { initDBLocal(); return; }
     if (estaVacioLocal()) {
       const ok = await syncFromFirebase(true);
       if (!ok) initDBLocal();
       return;
     }
     const tsFirebase = await getFirebaseTimestamp();
-    const tsLocal    = localStorage.getItem('farrmacia_localModified');
+    const tsLocal    = localStorage.getItem(dbKey('localModified'));
     if (!tsFirebase) {
       if (DB.get('meds',[]).length>0) await syncToFirebase(true);
       return;
@@ -231,7 +415,7 @@ async function syncInteligente() {
     if (tsLocal && tsFirebase > tsLocal) {
       await syncFromFirebase(true);
       showToast('☁️ Datos actualizados desde Firebase','info');
-    } else if (localStorage.getItem('farrmacia_pendingSync')==='true') {
+    } else if (localStorage.getItem(dbKey('pendingSync'))==='true') {
       await syncToFirebase(true);
     }
   } catch(err) { console.error('syncInteligente:',err); }
@@ -262,29 +446,38 @@ function mostrarSpinnerInicio(mostrar) {
 function actualizarIndicadorSync(ok) {
   const bar = document.getElementById('sync-status-bar');
   if (!bar) return;
+  if(getModo()==='local'){
+    bar.style.display='flex';
+    bar.textContent='💾 Modo local — sin sincronización en la nube';
+    bar.style.background='#e8f5ff';bar.style.borderColor='#90caf9';bar.style.color='#1565c0';
+    return;
+  }
   bar.style.display = ok ? 'none' : 'flex';
+  bar.style.background='';bar.style.borderColor='';bar.style.color='';
+  bar.textContent='❌ Sin conexión — datos guardados localmente';
 }
 
 function abrirSyncPanel() {
-  const hasPending = localStorage.getItem('farrmacia_pendingSync')==='true';
-  const lastSync   = localStorage.getItem('farrmacia_lastSync');
+  const hasPending = localStorage.getItem(dbKey('pendingSync'))==='true';
+  const lastSync   = localStorage.getItem(dbKey('lastSync'));
+  const perfil     = getPerfilActivo();
   const modal = document.createElement('div'); modal.className='modal-overlay';
   modal.innerHTML = `
     <div class="modal-sheet">
       <div class="modal-handle"></div>
       <div class="modal-title">☁️ Firebase & Backup</div>
       <div style="background:#f0faf5;border-radius:12px;padding:14px;margin-bottom:12px;font-size:13px;color:#333;line-height:1.9">
-        <div><strong>Estado:</strong> ${hasPending?'⚠️ Cambios pendientes':'✅ Todo sincronizado'}</div>
+        <div><strong>Perfil:</strong> 👤 ${perfil?perfil.nombre:'(sin perfil)'} &nbsp;<button onclick="abrirGestorPerfiles()" style="background:none;border:1px solid var(--verde);border-radius:8px;padding:2px 8px;font-size:11px;cursor:pointer;color:var(--verde);font-weight:700">Cambiar</button></div>
+        <div><strong>Modo:</strong> ${getModo()==='local'?'💾 Solo local':'☁️ Firebase ('+getUserId()+')'}</div>
+        <div><strong>Estado:</strong> ${getModo()==='local'?'🔒 Sin nube':hasPending?'⚠️ Cambios pendientes':'✅ Todo sincronizado'}</div>
         <div><strong>Última sync:</strong> ${lastSync?new Date(lastSync).toLocaleString('es-ES'):'Nunca'}</div>
         <div><strong>Medicamentos:</strong> ${DB.get('meds',[]).length}</div>
-        <div><strong>Polling:</strong> activo cada 30s (detecta cambios desde otro dispositivo)</div>
       </div>
-      <div style="font-size:12px;background:#fffde7;border-radius:10px;padding:10px;margin-bottom:12px;color:#666;line-height:1.6">
-        💡 Los archivos subidos al historial se sincronizan si son menores de ~500KB. Los más grandes solo existen en este dispositivo — usa el Backup para transferirlos.
-      </div>
+      ${getModo()==='firebase'?`
       <button class="btn-primary" onclick="syncToFirebase();this.closest('.modal-overlay').remove()">☁️ Subir a Firebase ahora</button>
       <button class="btn-primary" style="background:var(--azul);margin-top:8px" onclick="syncFromFirebase();this.closest('.modal-overlay').remove()">📥 Descargar de Firebase ahora</button>
       <hr style="margin:14px 0;border:none;border-top:1px solid #eee"/>
+      `:''}
       <div style="font-size:13px;font-weight:900;color:var(--azul-oscuro);margin-bottom:6px">💾 Backup local (JSON)</div>
       <button class="btn-secondary" style="margin-top:0" onclick="exportarBackup();this.closest('.modal-overlay').remove()">📤 Exportar Backup completo</button>
       <button class="btn-secondary" style="margin-top:8px" onclick="importarBackup()">📥 Importar Backup</button>
@@ -307,12 +500,32 @@ async function exportarBackup() {
     const backup = { version:4, fecha:new Date().toISOString(), meds:DB.get('meds',[]), citas:DB.get('citas',[]), historial_pedidos:DB.get('historial_pedidos',[]), notas:DB.get('notas',''), docs:docsConB64, nextId:DB.get('nextId',100), nextPedidoId:DB.get('nextPedidoId',1) };
     const blob = new Blob([JSON.stringify(backup,null,2)],{type:'application/json'});
     const fname = `farrmacia_backup_${new Date().toISOString().slice(0,10)}.json`;
-    if (navigator.share&&navigator.canShare?.({files:[new File([blob],fname)]})) {
-      await navigator.share({files:[new File([blob],fname,{type:'application/json'})],title:'Backup FaR-Rmacia'});
-    } else {
-      const url=URL.createObjectURL(blob);
-      Object.assign(document.createElement('a'),{href:url,download:fname}).click();
-      setTimeout(()=>URL.revokeObjectURL(url),5000);
+
+    // Intentar compartir nativo (Android), con fallback a descarga directa
+    let compartido = false;
+    if (navigator.share && navigator.canShare) {
+      try {
+        const file = new File([blob], fname, {type:'application/json'});
+        if (navigator.canShare({files:[file]})) {
+          await navigator.share({files:[file], title:'Backup FaR-Rmacia'});
+          compartido = true;
+        }
+      } catch(shareErr) {
+        // Si falla el share (Permission denied, cancelado, etc.) → fallback descarga
+        console.warn('Share falló, usando descarga:', shareErr.message);
+      }
+    }
+
+    if (!compartido) {
+      // Descarga directa (funciona en PC y móvil)
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 5000);
     }
     showToast('✅ Backup exportado');
   } catch(err) { showToast('⚠️ Error: '+err.message,'error'); }
@@ -336,7 +549,7 @@ async function procesarImportBackup(event) {
           DB.setRaw('docs',data.docs.map(({base64,...m})=>m));
           for(const doc of data.docs) if(doc.es_archivo&&doc.base64) await idbSet(doc.id,doc.base64,doc.tipo,doc.nombre).catch(()=>{});
         }
-        localStorage.setItem('farrmacia_localModified',new Date().toISOString());
+    localStorage.setItem(dbKey('localModified'),new Date().toISOString());
         showToast('✅ Backup importado','success');
         await syncToFirebase(true);
         navigate(currentScreen); cargarCitasMini();
@@ -348,16 +561,16 @@ async function procesarImportBackup(event) {
 
 function initDBLocal() {
   if (!estaVacioLocal()) return;
-  localStorage.setItem('farrmacia_meds',JSON.stringify([{id:1,nombre:'Ejemplo - Omeprazol 20mg',cantidad_bote:28,dosis_dia:1,stock_real:2,observaciones:'En ayunas',foto:'',fecha_inicio:'',incluir_pedido:1}]));
-  localStorage.setItem('farrmacia_nextId',JSON.stringify(100));
-  localStorage.setItem('farrmacia_nextPedidoId',JSON.stringify(1));
-  localStorage.setItem('farrmacia_notas',JSON.stringify(''));
-  localStorage.setItem('farrmacia_citas',JSON.stringify([]));
-  localStorage.setItem('farrmacia_historial_pedidos',JSON.stringify([]));
-  localStorage.setItem('farrmacia_docs',JSON.stringify([]));
-  localStorage.setItem('farrmacia_localModified',new Date().toISOString());
+  localStorage.setItem(dbKey('meds'),JSON.stringify([{id:1,nombre:'Ejemplo - Omeprazol 20mg',cantidad_bote:28,dosis_dia:1,stock_real:2,observaciones:'En ayunas',foto:'',fecha_inicio:'',incluir_pedido:1}]));
+  localStorage.setItem(dbKey('nextId'),JSON.stringify(100));
+  localStorage.setItem(dbKey('nextPedidoId'),JSON.stringify(1));
+  localStorage.setItem(dbKey('notas'),JSON.stringify(''));
+  localStorage.setItem(dbKey('citas'),JSON.stringify([]));
+  localStorage.setItem(dbKey('historial_pedidos'),JSON.stringify([]));
+  localStorage.setItem(dbKey('docs'),JSON.stringify([]));
+  localStorage.setItem(dbKey('localModified'),new Date().toISOString());
 }
-function nextId() { const n=DB.get('nextId',100)+1; localStorage.setItem('farrmacia_nextId',JSON.stringify(n)); return n; }
+function nextId() { const n=DB.get('nextId',100)+1; localStorage.setItem(dbKey('nextId'),JSON.stringify(n)); return n; }
 
 // =============================================
 // ===== PDF PEDIDO — jsPDF (móvil + PC) =======
@@ -514,20 +727,67 @@ async function generarPDFPedido(numPedido, fecha, filas) {
   }
 }
 
-// ── Swipe ──
-const NAV_ORDER=['menu','inventario','pedidos','citas','historial'];
-let swipeStartX=0,swipeStartY=0;
+// ── Swipe / Scroll continuo tipo launcher ──
+const NAV_SWIPE_ORDER=['menu','inventario','pedidos','citas','historial'];
+let swipeStartX=0,swipeStartY=0,swipeDragging=false,swipeCurrentOffset=0;
+
 function initSwipeGestures() {
   const c=document.getElementById('content');
-  c.addEventListener('touchstart',e=>{swipeStartX=e.touches[0].clientX;swipeStartY=e.touches[0].clientY;},{passive:true});
+  const wrapper=document.getElementById('screens-wrapper');
+  if(!wrapper)return;
+
+  c.addEventListener('touchstart',e=>{
+    // No iniciar swipe si hay un overlay activo
+    const overlayIds=['screen-historial-pedidos','screen-modificar','screen-medicamentos'];
+    for(const id of overlayIds){const el=document.getElementById(id);if(el&&el.style.display!=='none')return;}
+    swipeStartX=e.touches[0].clientX;
+    swipeStartY=e.touches[0].clientY;
+    swipeDragging=true;
+    // Desactivar transición durante el drag
+    wrapper.style.transition='none';
+    const idx=NAV_SWIPE_ORDER.indexOf(currentScreen);
+    swipeCurrentOffset=idx>=0?idx*window.innerWidth:0;
+  },{passive:true});
+
+  c.addEventListener('touchmove',e=>{
+    if(!swipeDragging)return;
+    const dx=e.touches[0].clientX-swipeStartX;
+    const dy=e.touches[0].clientY-swipeStartY;
+    // Si el movimiento es más vertical que horizontal, no hacer swipe
+    if(Math.abs(dy)>Math.abs(dx)*1.5)return;
+    const idx=NAV_SWIPE_ORDER.indexOf(currentScreen);
+    if(idx<0)return;
+    // Límites: no pasar del primer/último panel
+    const maxOffset=(NAV_SWIPE_ORDER.length-1)*window.innerWidth;
+    const raw=swipeCurrentOffset-dx;
+    const clamped=Math.max(0,Math.min(maxOffset,raw));
+    wrapper.style.transform=`translateX(-${clamped}px)`;
+  },{passive:true});
+
   c.addEventListener('touchend',e=>{
-    const dx=e.changedTouches[0].clientX-swipeStartX,dy=e.changedTouches[0].clientY-swipeStartY;
-    if(Math.abs(dx)<60||Math.abs(dx)<Math.abs(dy)*1.5) return;
-    const idx=NAV_ORDER.indexOf(currentScreen); if(idx<0) return;
-    if(dx<0&&idx<NAV_ORDER.length-1) navigate(NAV_ORDER[idx+1]);
-    else if(dx>0&&idx>0) navigate(NAV_ORDER[idx-1]);
+    if(!swipeDragging)return;
+    swipeDragging=false;
+    // Reactivar transición
+    wrapper.style.transition='transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+    const dx=e.changedTouches[0].clientX-swipeStartX;
+    const dy=e.changedTouches[0].clientY-swipeStartY;
+    if(Math.abs(dx)<40||Math.abs(dx)<Math.abs(dy)*1.5){
+      // Snap de vuelta a la posición actual
+      const idx=NAV_SWIPE_ORDER.indexOf(currentScreen);
+      if(idx>=0)wrapper.style.transform=`translateX(-${idx*window.innerWidth}px)`;
+      return;
+    }
+    const idx=NAV_SWIPE_ORDER.indexOf(currentScreen);
+    if(idx<0)return;
+    if(dx<-40&&idx<NAV_SWIPE_ORDER.length-1) navigate(NAV_SWIPE_ORDER[idx+1]);
+    else if(dx>40&&idx>0) navigate(NAV_SWIPE_ORDER[idx-1]);
+    else{
+      // Snap de vuelta
+      wrapper.style.transform=`translateX(-${idx*window.innerWidth}px)`;
+    }
   },{passive:true});
 }
+
 
 // ── Fotos ──
 let fotoTemporal={f:null,m:null};
@@ -542,28 +802,108 @@ function borrarFoto(p){fotoTemporal[p]='';const pr=document.getElementById(p+'-f
 function mostrarFotoPrev(p,b64){const pr=document.getElementById(p+'-foto-prev'),b=document.getElementById(p+'-foto-del-btn');if(!pr)return;if(b64){pr.className='foto-preview';pr.innerHTML=`<img src="${b64}" style="width:100%;height:100%;object-fit:cover;border-radius:12px"/>`;if(b)b.style.display='block';}else{pr.className='foto-preview empty';pr.innerHTML='📷';if(b)b.style.display='none';}}
 
 // ── Navegación ──
+// NAV_ORDER: las 5 pantallas del launcher horizontal
+const NAV_ORDER=['menu','inventario','pedidos','citas','historial'];
+// OVERLAY_SCREENS: se muestran encima (no en el carrusel)
+const OVERLAY_SCREENS=['modificar','historial-pedidos','medicamentos'];
 let currentScreen='menu',navHistory=[],editingCitaId=null,pedidoItems=[];
+
 function navigate(screen) {
   if(currentScreen!==screen) navHistory.push(currentScreen);
   currentScreen=screen;
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById('screen-'+screen)?.classList.add('active');
-  const T={'menu':{t:'💊 FaR-Rmacia',s:'Tu farmacia personal',b:false},'inventario':{t:'📦 Stock e Inventario',s:'',b:true},'medicamentos':{t:'💊 Nuevo Medicamento',s:'',b:true},'pedidos':{t:'🛒 Pedido Farmacia',s:'',b:true},'citas':{t:'📅 Citas Médicas',s:'',b:true},'historial':{t:'📁 Historial Médico',s:'',b:true},'modificar':{t:'✏️ Modificar',s:'',b:true},'historial-pedidos':{t:'📜 Historial Pedidos',s:'',b:true}};
+
+  // Cerrar todos los overlays
+  ['screen-historial-pedidos','screen-modificar','screen-medicamentos'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.style.display='none';
+  });
+
+  const OVERLAYS=['historial-pedidos','modificar','medicamentos'];
+
+  if(OVERLAYS.includes(screen)) {
+    // Mostrar overlay encima del carrusel
+    const el=document.getElementById('screen-'+screen);
+    if(el){ el.style.display='block'; el.scrollTop=0; }
+    _updateHeader(screen);
+    _updateNav(screen==='medicamentos'?'inventario':screen);
+    _updateFab(screen);
+    _loadScreen(screen);
+    return;
+  }
+
+  // ── Pantalla del carrusel ──
+  const idxTarget = NAV_ORDER.indexOf(screen);
+  if(idxTarget >= 0) _scrollToSlot(idxTarget);
+
+  _updateHeader(screen);
+  _updateNav(screen);
+  _updateFab(screen);
+  _loadScreen(screen);
+}
+
+function _scrollToSlot(idx) {
+  const wrapper = document.getElementById('screens-wrapper');
+  if(wrapper) {
+    wrapper.style.transition='transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+    wrapper.style.transform = `translateX(-${idx * 100}vw)`;
+  }
+}
+
+function _updateHeader(screen) {
+  const T={
+    'menu':           {t:'💊 FaR-Rmacia',         s:'Tu farmacia personal', b:false},
+    'inventario':     {t:'📦 Stock e Inventario',  s:'', b:true},
+    'medicamentos':   {t:'💊 Nuevo Medicamento',   s:'', b:true},
+    'pedidos':        {t:'🛒 Pedido Farmacia',      s:'', b:true},
+    'citas':          {t:'📅 Citas Médicas',        s:'', b:true},
+    'historial':      {t:'📁 Historial Médico',     s:'', b:true},
+    'modificar':      {t:'✏️ Modificar',            s:'', b:true},
+    'historial-pedidos':{t:'📜 Historial Pedidos', s:'', b:true}
+  };
   const t=T[screen]||{t:'FaR-Rmacia',s:'',b:true};
   document.getElementById('header-title').textContent=t.t;
   document.getElementById('header-sub').textContent=t.s;
   document.getElementById('btn-back').classList.toggle('visible',t.b);
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.nav===screen));
-  const fab=document.getElementById('fab');
-  if(['inventario','medicamentos','citas'].includes(screen)){fab.textContent='+';fab.classList.add('visible');}else fab.classList.remove('visible');
-  switch(screen){
-    case'menu':cargarCitasMini();break;case'inventario':renderInventario();break;case'pedidos':renderPedidos();break;
-    case'citas':renderCitas();break;case'historial':cargarHistorial();break;case'historial-pedidos':renderHistorialPedidos();break;
-    case'medicamentos':fotoTemporal['f']=null;mostrarFotoPrev('f',null);break;
-  }
-  document.getElementById('content').scrollTop=0;
 }
-function goBack(){if(navHistory.length>0){const p=navHistory.pop();navHistory.pop();navigate(p);}else navigate('menu');}
+
+function _updateNav(screen) {
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active',b.dataset.nav===screen));
+}
+
+function _updateFab(screen) {
+  const fab=document.getElementById('fab');
+  if(['inventario','medicamentos','citas'].includes(screen)){fab.textContent='+';fab.classList.add('visible');}
+  else fab.classList.remove('visible');
+}
+
+function _loadScreen(screen) {
+  switch(screen){
+    case'menu':          cargarCitasMini(); break;
+    case'inventario':    renderInventario(); break;
+    case'pedidos':       renderPedidos(); break;
+    case'citas':         renderCitas(); break;
+    case'historial':     cargarHistorial(); break;
+    case'historial-pedidos': renderHistorialPedidos(); break;
+    case'medicamentos':  fotoTemporal['f']=null;mostrarFotoPrev('f',null); break;
+  }
+}
+
+function goBack(){
+  const OVERLAYS=['historial-pedidos','modificar','medicamentos'];
+  for(const s of OVERLAYS){
+    const el=document.getElementById('screen-'+s);
+    if(el&&el.style.display!=='none'){
+      el.style.display='none';
+      currentScreen=navHistory.length>0?navHistory.pop():'menu';
+      if(navHistory.length>0)navHistory.pop();
+      _updateHeader(currentScreen);
+      _updateNav(currentScreen);
+      _updateFab(currentScreen);
+      return;
+    }
+  }
+  if(navHistory.length>0){const p=navHistory.pop();navHistory.pop();navigate(p);}else navigate('menu');
+}
 function fabAction(){if(['inventario','medicamentos'].includes(currentScreen)){navigate('medicamentos');limpiarFormulario();}else if(currentScreen==='citas')document.getElementById('c-prof').focus();}
 function actualizarReloj(){const a=new Date();document.getElementById('header-clock').innerHTML=`${String(a.getDate()).padStart(2,'0')} ${a.toLocaleString('es-ES',{month:'short'})} ${a.getFullYear()}<br>${String(a.getHours()).padStart(2,'0')}:${String(a.getMinutes()).padStart(2,'0')}`;}
 function showToast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='show '+type;setTimeout(()=>t.className='',2800);}
@@ -600,7 +940,7 @@ function renderInventario(){
   }).join('');
 }
 function verFotoMed(id){const med=DB.get('meds').find(m=>m.id==id);if(!med?.foto)return;const mo=document.createElement('div');mo.className='modal-overlay';mo.innerHTML=`<div class="modal-sheet" style="text-align:center"><div class="modal-handle"></div><div class="modal-title">📷 ${med.nombre}</div><img src="${med.foto}" style="max-width:100%;border-radius:12px;margin-bottom:12px"/><button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cerrar</button></div>`;document.body.appendChild(mo);mo.addEventListener('click',e=>{if(e.target===mo)mo.remove();});}
-function limpiarFormulario(){['f-nombre','f-bote','f-dosis','f-stock','f-obs'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});const inc=document.getElementById('f-incluir');if(inc)inc.checked=true;fotoTemporal['f']=null;mostrarFotoPrev('f',null);}
+function limpiarFormulario(){['f-nombre','f-bote','f-dosis','f-stock'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});const obs=document.getElementById('f-obs');if(obs)obs.value='';const inc=document.getElementById('f-incluir');if(inc)inc.checked=true;fotoTemporal['f']=null;mostrarFotoPrev('f',null);}
 function guardarMedicamento(){const nom=document.getElementById('f-nombre').value.trim();if(!nom){showToast('⚠️ Escribe el nombre','error');return;}const meds=DB.get('meds');meds.push({id:nextId(),nombre:nom,cantidad_bote:parseFloat(document.getElementById('f-bote').value)||0,dosis_dia:parseFloat(document.getElementById('f-dosis').value)||0,stock_real:parseFloat(document.getElementById('f-stock').value)||0,observaciones:document.getElementById('f-obs').value.trim(),foto:fotoTemporal['f']||'',fecha_inicio:'',incluir_pedido:document.getElementById('f-incluir').checked?1:0});DB.set('meds',meds);limpiarFormulario();showToast('✅ Medicamento guardado');navigate('inventario');}
 function iniciarTratamiento(id){const mo=document.createElement('div');mo.className='modal-overlay';mo.innerHTML=`<div class="modal-sheet"><div class="modal-handle"></div><div class="modal-title">📅 Fecha de inicio</div><div class="form-group"><label class="form-label">Selecciona la fecha</label><input type="date" class="form-input" id="modal-fecha" value="${new Date().toISOString().split('T')[0]}" style="padding:12px"/></div><button class="btn-primary" onclick="guardarFechaInicio(${id})">💾 Guardar Fecha</button><button class="btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`;document.body.appendChild(mo);mo.addEventListener('click',e=>{if(e.target===mo)mo.remove();});}
 function guardarFechaInicio(id){const f=document.getElementById('modal-fecha').value,meds=DB.get('meds'),i=meds.findIndex(m=>m.id===id);if(i>=0){meds[i].fecha_inicio=f;DB.set('meds',meds);showToast('✅ Tratamiento iniciado');document.querySelector('.modal-overlay')?.remove();renderInventario();}}
@@ -639,26 +979,47 @@ function mostrarResumenPedido(numPedido,fecha,items){
   mo.addEventListener('click',e=>{if(e.target===mo)mo.remove();});
 }
 
-// ── Historial Pedidos (con botón borrar pedido completo) ──
+// ── Historial Pedidos (expandible al tocar) ──
 function renderHistorialPedidos(){
   const hist=[...DB.get('historial_pedidos',[])].reverse();
   const c=document.getElementById('historial-pedidos-list');
   if(!hist.length){c.innerHTML=`<div class="empty-state"><div class="empty-icon">📜</div><div class="empty-text">No hay pedidos.</div></div>`;return;}
   const grupos={};
   hist.forEach(h=>{if(!grupos[h.num_pedido])grupos[h.num_pedido]={fecha:h.fecha,items:[]};grupos[h.num_pedido].items.push(h);});
-  c.innerHTML=Object.entries(grupos).map(([numP,g])=>`
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+  c.innerHTML=Object.entries(grupos).map(([numP,g])=>{
+    const filas=g.items.map(it=>({nombre:it.medicamento,qty:it.botes_pedidos,stockActual:Math.round((it.botes_total-it.botes_pedidos)*10)/10,stockTras:Math.round(it.botes_total*10)/10,diasTras:it.dias_restantes_tras_pedido||0,mesesTras:((it.dias_restantes_tras_pedido||0)/30).toFixed(1)}));
+    const tabla=`<table class="resumen-table"><thead><tr><th>Medicamento</th><th style="text-align:center">Pedir</th><th style="text-align:center">Stock</th><th style="text-align:center">Total</th><th>Meses/Días</th></tr></thead><tbody>${filas.map(f=>`<tr><td>${f.nombre}</td><td class="qty-cell">${f.qty}</td><td style="text-align:center">${f.stockActual}</td><td style="text-align:center;font-weight:900">${f.stockTras}</td><td class="dias-cell">${f.diasTras} días | ${f.mesesTras} mes.</td></tr>`).join('')}</tbody></table>`;
+    const safeId=numP.replace(/[^a-zA-Z0-9]/g,'_');
+    return `
+    <div class="card" style="cursor:pointer" onclick="toggleHistorialDetalle('${safeId}')">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
         <div style="font-size:15px;font-weight:900;color:var(--azul-oscuro)">📋 ${numP}</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <span style="font-size:11px;color:#999">${g.fecha}</span>
-          <button class="btn-sm btn-sm-verde" onclick="generarPDFPedidoHistorial('${numP}')">📄 PDF</button>
-          <button class="btn-sm btn-sm-azul"  onclick="compartirPedidoHistorial('${numP}')">📤</button>
-          <button class="btn-sm btn-sm-rojo"  onclick="borrarPedidoHistorial('${numP}')">🗑️</button>
+          <span style="font-size:12px;font-weight:700;color:var(--verde)">${g.items.length} med.</span>
+          <span id="flecha-${safeId}" style="font-size:16px;color:var(--gris-texto);transition:transform 0.25s">▼</span>
         </div>
       </div>
-      ${g.items.map(it=>`<div class="historial-item"><div class="historial-item-med">💊 ${it.medicamento}</div><div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap"><span class="badge badge-amarillo">Pedido: ${it.botes_pedidos}</span><span class="badge badge-verde">Total: ${Math.round(it.botes_total*100)/100}</span>${it.dias_restantes_tras_pedido?`<span class="badge badge-azul">${it.dias_restantes_tras_pedido} días</span>`:''}</div></div>`).join('')}
-    </div>`).join('');
+      <!-- Resumen expandible -->
+      <div id="detalle-${safeId}" style="display:none;margin-top:12px;animation:fadeIn 0.2s">
+        ${tabla}
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:10px">
+          <button class="btn-sm btn-sm-verde" onclick="event.stopPropagation();generarPDFPedidoHistorial('${numP}')">📄 PDF</button>
+          <button class="btn-sm btn-sm-azul"  onclick="event.stopPropagation();compartirPedidoHistorial('${numP}')">📤 Compartir</button>
+          <button class="btn-sm btn-sm-rojo"  onclick="event.stopPropagation();borrarPedidoHistorial('${numP}')">🗑️ Borrar</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleHistorialDetalle(safeId){
+  const det=document.getElementById('detalle-'+safeId);
+  const flecha=document.getElementById('flecha-'+safeId);
+  if(!det)return;
+  const abierto=det.style.display!=='none';
+  det.style.display=abierto?'none':'block';
+  if(flecha)flecha.style.transform=abierto?'':'rotate(180deg)';
 }
 
 function borrarPedidoHistorial(numPedido) {
@@ -676,7 +1037,7 @@ function renderCitas(){const hoy=new Date().toISOString().split('T')[0],manana=n
 function formatFecha(f){if(!f)return'';const[y,m,d]=f.split('-');return`${d} ${'Ene Feb Mar Abr May Jun Jul Ago Sep Oct Nov Dic'.split(' ')[parseInt(m)-1]} ${y}`;}
 function guardarCita(){const prof=document.getElementById('c-prof').value.trim();if(!prof){showToast('⚠️ Introduce el médico','error');return;}const cita={id:editingCitaId||nextId(),profesional:prof,fecha:document.getElementById('c-fecha').value,hora:document.getElementById('c-hora').value,observaciones:document.getElementById('c-obs').value.trim()};const citas=DB.get('citas',[]);if(editingCitaId){const i=citas.findIndex(c=>c.id===editingCitaId);if(i>=0)citas[i]=cita;showToast('✅ Cita actualizada');}else{citas.push(cita);showToast('✅ Cita añadida');}DB.set('citas',citas);cancelarEditarCita();renderCitas();cargarCitasMini();}
 function editarCita(id){const ci=DB.get('citas',[]).find(c=>c.id===id);if(!ci)return;editingCitaId=id;document.getElementById('c-prof').value=ci.profesional;document.getElementById('c-fecha').value=ci.fecha;document.getElementById('c-hora').value=ci.hora;document.getElementById('c-obs').value=ci.observaciones;document.getElementById('citas-form-title').textContent='✏️ Editar Cita';document.getElementById('c-btn-guardar').textContent='💾 Actualizar Cita';document.getElementById('c-btn-guardar').style.background='#f39c12';document.getElementById('c-btn-cancelar').style.display='block';document.getElementById('content').scrollTop=0;}
-function cancelarEditarCita(){editingCitaId=null;['c-prof','c-obs'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});document.getElementById('c-fecha').value=new Date().toISOString().split('T')[0];document.getElementById('c-hora').value='10:00';document.getElementById('citas-form-title').textContent='➕ Nueva Cita';document.getElementById('c-btn-guardar').textContent='➕ Añadir Cita';document.getElementById('c-btn-guardar').style.background='';document.getElementById('c-btn-cancelar').style.display='none';}
+function cancelarEditarCita(){editingCitaId=null;['c-prof'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});const obs=document.getElementById('c-obs');if(obs)obs.value='';document.getElementById('c-fecha').value=new Date().toISOString().split('T')[0];document.getElementById('c-hora').value='10:00';document.getElementById('citas-form-title').textContent='➕ Nueva Cita';document.getElementById('c-btn-guardar').textContent='➕ Añadir Cita';document.getElementById('c-btn-guardar').style.background='';document.getElementById('c-btn-cancelar').style.display='none';}
 function borrarCita(id){showConfirm('🗑️ Borrar cita','¿Eliminar esta cita?',()=>{DB.set('citas',DB.get('citas',[]).filter(c=>c.id!==id));showToast('Cita eliminada','error');renderCitas();cargarCitasMini();});}
 function compartirCita(id){const ci=DB.get('citas',[]).find(c=>c.id===id);if(!ci)return;const txt=`📅 Cita médica\n${formatFecha(ci.fecha)} a las ${ci.hora}\nMédico: ${ci.profesional}${ci.observaciones?'\nNotas: '+ci.observaciones:''}`;if(navigator.share)navigator.share({title:'Cita médica',text:txt});else navigator.clipboard.writeText(txt).then(()=>showToast('📋 Copiado'));}
 
@@ -754,6 +1115,7 @@ function verificarAlertas(){const alertas=DB.get('meds').filter(med=>{const s=ca
 
 // ── INIT ──
 document.addEventListener('DOMContentLoaded',async()=>{
+  initPerfiles(); // Inicializar sistema de perfiles
   actualizarReloj();
   setInterval(actualizarReloj,30000);
   await idbOpen().catch(err=>console.warn('IDB:',err));
@@ -764,6 +1126,9 @@ document.addEventListener('DOMContentLoaded',async()=>{
   verificarCitasManana();
   solicitarPermisoNotificaciones().then(ok=>{if(ok)verificarCitasManana();});
   initSwipeGestures();
-  iniciarPolling(); // detectar cambios desde otro dispositivo cada 30s
+  iniciarPolling();
+  // Inicializar el carrusel en el slot 0 (menú)
+  const wrapper=document.getElementById('screens-wrapper');
+  if(wrapper){wrapper.style.transition='none';wrapper.style.transform='translateX(0)';}
   if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
 });
