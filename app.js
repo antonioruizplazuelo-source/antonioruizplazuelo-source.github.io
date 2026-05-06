@@ -1,4 +1,4 @@
-// FaR-Rmacia v4.0
+// FaR-Rmacia v4.1 — Firebase Authentication
 // MEJORAS:
 // 1) PDF en móvil: genera imagen/texto compartible en vez de window.print
 // 2) Archivos historial: se suben a Firebase como base64 (en chunks si son grandes)
@@ -16,6 +16,187 @@ const FIREBASE_CONFIG = {
   appId: "1:462585209909:web:e093a33ebae8c9fe6fbd7c"
 };
 const FIREBASE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+const FIREBASE_AUTH_BASE = `https://identitytoolkit.googleapis.com/v1/accounts`;
+
+// ── AUTH — Token de sesión ──
+let authToken = null;      // ID token de Firebase Auth
+let authEmail = null;      // Email del usuario logueado
+let tokenExpiry = 0;       // Timestamp de expiración del token
+
+// Guardar/recuperar sesión entre recargas
+function guardarSesion(token, email, expiresIn) {
+  authToken = token;
+  authEmail = email;
+  tokenExpiry = Date.now() + (parseInt(expiresIn) - 60) * 1000;
+  localStorage.setItem('farrmacia_auth_token', token);
+  localStorage.setItem('farrmacia_auth_email', email);
+  localStorage.setItem('farrmacia_auth_expiry', String(tokenExpiry));
+}
+function cargarSesionGuardada() {
+  const token   = localStorage.getItem('farrmacia_auth_token');
+  const email   = localStorage.getItem('farrmacia_auth_email');
+  const expiry  = parseInt(localStorage.getItem('farrmacia_auth_expiry') || '0');
+  if (token && email && Date.now() < expiry) {
+    authToken  = token;
+    authEmail  = email;
+    tokenExpiry = expiry;
+    return true;
+  }
+  return false;
+}
+function cerrarSesion() {
+  authToken = null; authEmail = null; tokenExpiry = 0;
+  localStorage.removeItem('farrmacia_auth_token');
+  localStorage.removeItem('farrmacia_auth_email');
+  localStorage.removeItem('farrmacia_auth_expiry');
+}
+function estaLogueado() {
+  return authToken && Date.now() < tokenExpiry;
+}
+
+// Login con email + contraseña contra Firebase Auth REST API
+async function loginFirebase(email, password) {
+  const url = `${FIREBASE_AUTH_BASE}:signInWithPassword?key=${FIREBASE_CONFIG.apiKey}`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true })
+  });
+  const j = await r.json();
+  if (!r.ok) {
+    // Traducir errores al español
+    const errores = {
+      'EMAIL_NOT_FOUND':      'Email no encontrado. Comprueba que esté bien escrito.',
+      'INVALID_PASSWORD':     'Contraseña incorrecta.',
+      'USER_DISABLED':        'Esta cuenta está desactivada.',
+      'INVALID_EMAIL':        'El email no tiene un formato válido.',
+      'TOO_MANY_ATTEMPTS_TRY_LATER': 'Demasiados intentos fallidos. Espera unos minutos.',
+      'INVALID_LOGIN_CREDENTIALS': 'Email o contraseña incorrectos.',
+    };
+    const code = j.error?.message || 'ERROR_DESCONOCIDO';
+    throw new Error(errores[code] || 'Error al iniciar sesión: ' + code);
+  }
+  guardarSesion(j.idToken, j.email, j.expiresIn);
+  return j;
+}
+
+// Obtener cabecera Authorization para las peticiones a Firestore
+function authHeaders() {
+  const base = { 'Content-Type': 'application/json' };
+  if (authToken) base['Authorization'] = 'Bearer ' + authToken;
+  return base;
+}
+
+// ── Pantalla de LOGIN ──
+function mostrarPantallaLogin(mensajeError = '') {
+  // Ocultar la app mientras no esté logueado
+  document.getElementById('app').style.display = 'none';
+
+  let loginEl = document.getElementById('login-screen');
+  if (!loginEl) {
+    loginEl = document.createElement('div');
+    loginEl.id = 'login-screen';
+    loginEl.style.cssText = `
+      position:fixed; inset:0; z-index:9999;
+      background: linear-gradient(160deg, #1E7A47 0%, #3DAA6E 45%, #5CC98A 80%, #8DE8B5 100%);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      font-family:'Nunito',sans-serif; padding:24px;
+    `;
+    loginEl.innerHTML = `
+      <div style="background:white;border-radius:28px;padding:32px 24px;width:100%;max-width:380px;box-shadow:0 8px 40px rgba(0,0,0,0.18)">
+        <div style="text-align:center;margin-bottom:24px">
+          <div style="font-size:52px;margin-bottom:8px">💊</div>
+          <div style="font-size:28px;font-weight:900;color:#1B5E20">FaR-<span style="color:#CCFF00;-webkit-text-stroke:1px #888">Rmacia</span></div>
+          <div style="font-size:13px;color:#888;margin-top:4px;font-weight:600">Tu farmacia personal</div>
+        </div>
+        <div id="login-error" style="display:none;background:#fde8e8;border-radius:12px;padding:10px 14px;font-size:13px;color:#c62828;font-weight:700;margin-bottom:16px;text-align:center"></div>
+        <div style="margin-bottom:14px">
+          <label style="font-size:11px;font-weight:800;color:#666;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Email</label>
+          <input id="login-email" type="email" autocomplete="email"
+            style="width:100%;padding:13px 14px;border:2px solid #d5eee2;border-radius:12px;font-size:16px;font-family:'Nunito',sans-serif;outline:none;box-sizing:border-box"
+            placeholder="tu@email.com"
+            onfocus="this.style.borderColor='#3DAA6E'"
+            onblur="this.style.borderColor='#d5eee2'"/>
+        </div>
+        <div style="margin-bottom:22px">
+          <label style="font-size:11px;font-weight:800;color:#666;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Contraseña</label>
+          <input id="login-pass" type="password" autocomplete="current-password"
+            style="width:100%;padding:13px 14px;border:2px solid #d5eee2;border-radius:12px;font-size:16px;font-family:'Nunito',sans-serif;outline:none;box-sizing:border-box"
+            placeholder="••••••••"
+            onfocus="this.style.borderColor='#3DAA6E'"
+            onblur="this.style.borderColor='#d5eee2'"
+            onkeydown="if(event.key==='Enter')hacerLogin()"/>
+        </div>
+        <button onclick="hacerLogin()"
+          style="width:100%;padding:15px;background:linear-gradient(135deg,#3DAA6E,#5CC98A);color:white;border:none;border-radius:16px;font-size:17px;font-weight:900;font-family:'Nunito',sans-serif;cursor:pointer;letter-spacing:.3px"
+          id="login-btn">
+          🔐 Entrar
+        </button>
+        <div style="text-align:center;margin-top:16px;font-size:12px;color:#aaa">
+          ¿Sin acceso? Contacta con el administrador de la app
+        </div>
+      </div>
+    `;
+    document.body.appendChild(loginEl);
+  }
+
+  loginEl.style.display = 'flex';
+
+  if (mensajeError) {
+    const err = document.getElementById('login-error');
+    if (err) { err.textContent = mensajeError; err.style.display = 'block'; }
+  }
+
+  // Foco automático en el email
+  setTimeout(() => document.getElementById('login-email')?.focus(), 100);
+}
+
+function ocultarPantallaLogin() {
+  const loginEl = document.getElementById('login-screen');
+  if (loginEl) loginEl.style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+}
+
+async function hacerLogin() {
+  const email = document.getElementById('login-email')?.value.trim();
+  const pass  = document.getElementById('login-pass')?.value;
+  const btn   = document.getElementById('login-btn');
+  const err   = document.getElementById('login-error');
+
+  if (!email || !pass) {
+    if (err) { err.textContent = '⚠️ Introduce email y contraseña'; err.style.display = 'block'; }
+    return;
+  }
+
+  if (btn) { btn.textContent = '⏳ Conectando...'; btn.disabled = true; }
+  if (err) err.style.display = 'none';
+
+  try {
+    await loginFirebase(email, pass);
+    ocultarPantallaLogin();
+    // Inicializar la app normalmente tras el login
+    await iniciarAppTrasLogin();
+  } catch(e) {
+    mostrarPantallaLogin(e.message);
+    if (btn) { btn.textContent = '🔐 Entrar'; btn.disabled = false; }
+  }
+}
+
+async function iniciarAppTrasLogin() {
+  initPerfiles();
+  await idbOpen().catch(err => console.warn('IDB:', err));
+  await syncInteligente();
+  document.getElementById('c-fecha').value = new Date().toISOString().split('T')[0];
+  cargarCitasMini();
+  verificarAlertas();
+  verificarCitasManana();
+  solicitarPermisoNotificaciones().then(ok => { if (ok) verificarCitasManana(); });
+  initSwipeGestures();
+  iniciarPolling();
+  const wrapper = document.getElementById('screens-wrapper');
+  if (wrapper) { wrapper.style.transition = 'none'; wrapper.style.transform = 'translateX(0)'; }
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 
 // ── IndexedDB (archivos binarios locales) ──
 let idbDb = null;
@@ -259,7 +440,7 @@ let syncInProgress=false, syncTimer=null, pollTimer=null;
 async function getFirebaseTimestamp() {
   if(getModo()==='local') return null;
   try {
-    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}?mask.fieldPaths=ultimaSincro`);
+    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}?mask.fieldPaths=ultimaSincro`, { headers: authHeaders() });
     if (!r.ok) return null;
     const j = await r.json();
     return j.fields?.ultimaSincro ? parseFsVal(j.fields.ultimaSincro) : null;
@@ -302,7 +483,7 @@ async function syncToFirebase(silencioso=false) {
     };
     const fields={};
     for (const k in data) fields[k]=fsVal(data[k]);
-    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});
+    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}`,{method:'PATCH',headers:authHeaders(),body:JSON.stringify({fields})});
     if (!r.ok) throw new Error('HTTP '+r.status);
     localStorage.setItem(dbKey('lastSync'),data.ultimaSincro);
     localStorage.removeItem(dbKey('pendingSync'));
@@ -329,7 +510,7 @@ async function syncFromFirebase(silencioso=false) {
   syncInProgress=true;
   document.getElementById('btn-sync')?.classList.add('syncing');
   try {
-    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}`);
+    const r = await fetch(`${FIREBASE_BASE}/usuarios/${getUserId()}`, { headers: authHeaders() });
     if (!r.ok) throw new Error('HTTP '+r.status);
     const j = await r.json();
     if (!j.fields) throw new Error('Sin datos');
@@ -467,7 +648,7 @@ function abrirSyncPanel() {
       <div class="modal-handle"></div>
       <div class="modal-title">☁️ Firebase & Backup</div>
       <div style="background:#f0faf5;border-radius:12px;padding:14px;margin-bottom:12px;font-size:13px;color:#333;line-height:1.9">
-        <div><strong>Perfil:</strong> 👤 ${perfil?perfil.nombre:'(sin perfil)'} &nbsp;<button onclick="abrirGestorPerfiles()" style="background:none;border:1px solid var(--verde);border-radius:8px;padding:2px 8px;font-size:11px;cursor:pointer;color:var(--verde);font-weight:700">Cambiar</button></div>
+        <div><strong>Usuario:</strong> ${authEmail || 'No identificado'}</div>
         <div><strong>Modo:</strong> ${getModo()==='local'?'💾 Solo local':'☁️ Firebase ('+getUserId()+')'}</div>
         <div><strong>Estado:</strong> ${getModo()==='local'?'🔒 Sin nube':hasPending?'⚠️ Cambios pendientes':'✅ Todo sincronizado'}</div>
         <div><strong>Última sync:</strong> ${lastSync?new Date(lastSync).toLocaleString('es-ES'):'Nunca'}</div>
@@ -483,6 +664,7 @@ function abrirSyncPanel() {
       <button class="btn-secondary" style="margin-top:8px" onclick="importarBackup()">📥 Importar Backup</button>
       <input type="file" id="import-backup-input" accept=".json" style="display:none" onchange="procesarImportBackup(event)"/>
       <button class="btn-secondary" style="margin-top:16px" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      <button onclick="confirmarCerrarSesion()" style="width:100%;margin-top:8px;padding:11px;background:none;border:2px solid #e74c3c;border-radius:16px;color:#e74c3c;font-size:14px;font-weight:800;font-family:'Nunito',sans-serif;cursor:pointer">🚪 Cerrar sesión</button>
     </div>`;
   document.body.appendChild(modal);
   modal.addEventListener('click',e=>{if(e.target===modal)modal.remove();});
@@ -907,6 +1089,13 @@ function goBack(){
 function fabAction(){if(['inventario','medicamentos'].includes(currentScreen)){navigate('medicamentos');limpiarFormulario();}else if(currentScreen==='citas')document.getElementById('c-prof').focus();}
 function actualizarReloj(){const a=new Date();document.getElementById('header-clock').innerHTML=`${String(a.getDate()).padStart(2,'0')} ${a.toLocaleString('es-ES',{month:'short'})} ${a.getFullYear()}<br>${String(a.getHours()).padStart(2,'0')}:${String(a.getMinutes()).padStart(2,'0')}`;}
 function showToast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='show '+type;setTimeout(()=>t.className='',2800);}
+function confirmarCerrarSesion() {
+  document.querySelector('.modal-overlay')?.remove();
+  showConfirm('🚪 Cerrar sesión', '¿Seguro que quieres cerrar sesión? Tendrás que volver a introducir tu email y contraseña.', () => {
+    cerrarSesion();
+    mostrarPantallaLogin();
+  });
+}
 function showConfirm(title,text,onOk){const o=document.createElement('div');o.className='confirm-overlay';o.innerHTML=`<div class="confirm-box"><div class="confirm-title">${title}</div><div class="confirm-text">${text}</div><div class="confirm-btns"><button class="confirm-cancel" onclick="this.closest('.confirm-overlay').remove()">Cancelar</button><button class="confirm-ok" id="conf-ok">Sí, confirmar</button></div></div>`;document.body.appendChild(o);document.getElementById('conf-ok').onclick=()=>{o.remove();onOk()};}
 
 // ── Calcular stock ──
@@ -1114,21 +1303,23 @@ function borrarDoc(id){showConfirm('🗑️ Borrar documento','¿Eliminar este d
 function verificarAlertas(){const alertas=DB.get('meds').filter(med=>{const s=calcularStock(med);return s.iniciado&&s.diasRestantes<=14;});if(alertas.length){setTimeout(()=>showToast(`⚠️ Stock bajo: ${alertas.length} medicamento(s)`,'error'),1500);if(Notification.permission==='granted')new Notification('⚠️ Stock bajo – FaR-Rmacia',{body:alertas.map(m=>m.nombre).join(', '),icon:'icon-192.png',tag:'stock-bajo'});}}
 
 // ── INIT ──
-document.addEventListener('DOMContentLoaded',async()=>{
-  initPerfiles(); // Inicializar sistema de perfiles
+document.addEventListener('DOMContentLoaded', async () => {
   actualizarReloj();
-  setInterval(actualizarReloj,30000);
-  await idbOpen().catch(err=>console.warn('IDB:',err));
-  await syncInteligente();
-  document.getElementById('c-fecha').value=new Date().toISOString().split('T')[0];
-  cargarCitasMini();
-  verificarAlertas();
-  verificarCitasManana();
-  solicitarPermisoNotificaciones().then(ok=>{if(ok)verificarCitasManana();});
-  initSwipeGestures();
-  iniciarPolling();
-  // Inicializar el carrusel en el slot 0 (menú)
-  const wrapper=document.getElementById('screens-wrapper');
-  if(wrapper){wrapper.style.transition='none';wrapper.style.transform='translateX(0)';}
-  if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+  setInterval(actualizarReloj, 30000);
+
+  // ── Si el perfil activo es LOCAL, saltar el login ──
+  initPerfiles();
+  if (getModo() === 'local') {
+    await iniciarAppTrasLogin();
+    return;
+  }
+
+  // ── Modo Firebase: comprobar si hay sesión guardada válida ──
+  if (cargarSesionGuardada()) {
+    // Sesión válida → entrar directamente
+    await iniciarAppTrasLogin();
+  } else {
+    // Sin sesión → mostrar pantalla de login
+    mostrarPantallaLogin();
+  }
 });
