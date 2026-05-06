@@ -132,7 +132,12 @@ function mostrarPantallaLogin(mensajeError = '') {
           id="login-btn">
           🔐 Entrar
         </button>
-        <div style="text-align:center;margin-top:16px;font-size:12px;color:#aaa">
+        <div style="text-align:center;margin:14px 0 4px;color:#bbb;font-size:12px">— o —</div>
+        <button onclick="usarSinLogin()"
+          style="width:100%;padding:12px;background:white;border:2px solid #d5eee2;border-radius:16px;font-size:14px;font-weight:800;font-family:'Nunito',sans-serif;cursor:pointer;color:#555">
+          💾 Usar sin sincronización (solo local)
+        </button>
+        <div style="text-align:center;margin-top:14px;font-size:12px;color:#aaa">
           ¿Sin acceso? Contacta con el administrador de la app
         </div>
       </div>
@@ -155,6 +160,18 @@ function ocultarPantallaLogin() {
   const loginEl = document.getElementById('login-screen');
   if (loginEl) loginEl.style.display = 'none';
   document.getElementById('app').style.display = 'flex';
+}
+
+async function usarSinLogin() {
+  // Cambia el perfil activo a modo local temporalmente
+  const perfil = getPerfilActivo();
+  if (perfil) {
+    perfil.modo = 'local';
+    setPerfilActivo(perfil);
+  }
+  ocultarPantallaLogin();
+  await iniciarAppTrasLogin();
+  showToast('💾 Modo local — sin sincronización', 'info');
 }
 
 async function hacerLogin() {
