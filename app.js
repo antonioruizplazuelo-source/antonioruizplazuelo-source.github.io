@@ -163,12 +163,15 @@ function ocultarPantallaLogin() {
 }
 
 async function usarSinLogin() {
-  // Cambia el perfil activo a modo local temporalmente
-  const perfil = getPerfilActivo();
-  if (perfil) {
-    perfil.modo = 'local';
-    setPerfilActivo(perfil);
+  // Crear o reutilizar un perfil local dedicado (no toca el perfil Firebase)
+  let perfiles = getPerfiles();
+  let perfilLocal = perfiles.find(p => p.modo === 'local');
+  if (!perfilLocal) {
+    perfilLocal = { id: 'perfil_local', nombre: 'Local (sin nube)', modo: 'local', firebaseUserId: '' };
+    perfiles.push(perfilLocal);
+    setPerfiles(perfiles);
   }
+  setPerfilActivo(perfilLocal);
   ocultarPantallaLogin();
   await iniciarAppTrasLogin();
   showToast('💾 Modo local — sin sincronización', 'info');
@@ -374,18 +377,26 @@ function guardarNuevoPerfil(){
   showConfirm(`👤 Usar "${nombre}"`,`¿Cambiar a este perfil ahora?`,()=>cambiarPerfil(id));
 }
 
-async function cambiarPerfil(id){
-  const perfiles=getPerfiles();
-  const p=perfiles.find(x=>x.id===id);
-  if(!p)return;
+async function cambiarPerfil(id) {
+  const perfiles = getPerfiles();
+  const p = perfiles.find(x => x.id === id);
+  if (!p) return;
   setPerfilActivo(p);
+
+  // Si el perfil es Firebase y no hay sesión activa → pedir login
+  if (p.modo === 'firebase' && !estaLogueado()) {
+    document.querySelector('.modal-overlay')?.remove();
+    mostrarPantallaLogin('Introduce tus credenciales para sincronizar con este perfil');
+    return;
+  }
+
   mostrarSpinnerInicio(true);
-  // Si el perfil es firebase, sincronizar
-  if(p.modo==='firebase'&&estaVacioLocal()){
-    await syncFromFirebase(true).catch(()=>{});
+  if (p.modo === 'firebase' && estaVacioLocal()) {
+    await syncFromFirebase(true).catch(() => {});
   }
   mostrarSpinnerInicio(false);
-  showToast(`👤 Perfil: ${p.nombre}`,'info');
+  showToast(`👤 Perfil: ${p.nombre}`, 'info');
+  document.querySelector('.modal-overlay')?.remove();
   navigate('menu');
   cargarCitasMini();
   verificarAlertas();
@@ -665,7 +676,8 @@ function abrirSyncPanel() {
       <div class="modal-handle"></div>
       <div class="modal-title">☁️ Firebase & Backup</div>
       <div style="background:#f0faf5;border-radius:12px;padding:14px;margin-bottom:12px;font-size:13px;color:#333;line-height:1.9">
-        <div><strong>Usuario:</strong> ${authEmail || 'No identificado'}</div>
+        <div><strong>Perfil:</strong> 👤 ${perfil ? perfil.nombre : '(sin perfil)'} &nbsp;<button onclick="this.closest('.modal-overlay').remove();abrirGestorPerfiles()" style="background:none;border:1px solid var(--verde);border-radius:8px;padding:2px 8px;font-size:11px;cursor:pointer;color:var(--verde);font-weight:700">Cambiar</button></div>
+        <div><strong>Usuario:</strong> ${authEmail || (getModo()==='local' ? '— modo local' : 'No identificado')}</div>
         <div><strong>Modo:</strong> ${getModo()==='local'?'💾 Solo local':'☁️ Firebase ('+getUserId()+')'}</div>
         <div><strong>Estado:</strong> ${getModo()==='local'?'🔒 Sin nube':hasPending?'⚠️ Cambios pendientes':'✅ Todo sincronizado'}</div>
         <div><strong>Última sync:</strong> ${lastSync?new Date(lastSync).toLocaleString('es-ES'):'Nunca'}</div>
