@@ -661,6 +661,10 @@ function actualizarIndicadorSync(ok) {
     bar.style.background='#e8f5ff';bar.style.borderColor='#90caf9';bar.style.color='#1565c0';
     return;
   }
+  if(!ok && !estaLogueado()){
+    // No mostrar error si simplemente no hay sesión activa todavía
+    bar.style.display='none'; return;
+  }
   bar.style.display = ok ? 'none' : 'flex';
   bar.style.background='';bar.style.borderColor='';bar.style.color='';
   bar.textContent='❌ Sin conexión — datos guardados localmente';
@@ -1016,7 +1020,23 @@ function abrirCamara(p){document.getElementById(p+'-foto-camara-input')?.click()
 function procesarFoto(ev,p){
   const f=ev.target.files[0];if(!f)return;
   const r=new FileReader();
-  r.onload=e=>{fotoTemporal[p]=e.target.result;const pr=document.getElementById(p+'-foto-prev');if(pr){pr.className='foto-preview';pr.innerHTML=`<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;border-radius:12px"/>`;}const b=document.getElementById(p+'-foto-del-btn');if(b)b.style.display='block';};
+  r.onload=e=>{
+    // Comprimir la imagen antes de guardar (máx 800px, calidad 0.75)
+    const img=new Image();
+    img.onload=()=>{
+      const MAX=800;
+      let w=img.width,h=img.height;
+      if(w>MAX||h>MAX){if(w>h){h=Math.round(h*MAX/w);w=MAX;}else{w=Math.round(w*MAX/h);h=MAX;}}
+      const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      const b64=canvas.toDataURL('image/jpeg',0.75);
+      fotoTemporal[p]=b64;
+      const pr=document.getElementById(p+'-foto-prev');
+      if(pr){pr.className='foto-preview';pr.innerHTML=`<img src="${b64}" style="width:100%;height:100%;object-fit:cover;border-radius:12px"/>`;}
+      const b=document.getElementById(p+'-foto-del-btn');if(b)b.style.display='block';
+    };
+    img.src=e.target.result;
+  };
   r.readAsDataURL(f);ev.target.value='';
 }
 function borrarFoto(p){fotoTemporal[p]='';const pr=document.getElementById(p+'-foto-prev');if(pr){pr.className='foto-preview empty';pr.innerHTML='📷';}const b=document.getElementById(p+'-foto-del-btn');if(b)b.style.display='none';}
