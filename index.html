@@ -268,6 +268,7 @@
     .foto-actions { display: flex; flex-direction: column; gap: 6px; flex: 1; }
     .btn-foto { padding: 9px 14px; border: none; border-radius: 10px; font-size: 13px; font-weight: 800; cursor: pointer; font-family: 'Nunito', sans-serif; }
     .btn-foto-select { background: var(--azul); color: white; }
+    .btn-foto-camara { background: var(--morado); color: white; }
     .btn-foto-del    { background: #fde8e8; color: var(--rojo); }
 
     /* PEDIDOS */
@@ -512,11 +513,13 @@
           <div class="foto-preview-wrap">
             <div id="m-foto-prev" class="foto-preview empty">📷</div>
             <div class="foto-actions">
-              <button class="btn-foto btn-foto-select" onclick="seleccionarFoto('m')">📷 Cambiar foto</button>
+              <button class="btn-foto btn-foto-select" onclick="seleccionarFoto('m')">🖼️ Galería</button>
+              <button class="btn-foto btn-foto-camara" onclick="abrirCamara('m')">📸 Cámara</button>
               <button class="btn-foto btn-foto-del" id="m-foto-del-btn" style="display:none" onclick="borrarFoto('m')">🗑️ Quitar foto</button>
             </div>
           </div>
           <input type="file" id="m-foto-input" accept="image/*" style="display:none" onchange="procesarFoto(event,'m')"/>
+          <input type="file" id="m-foto-camara-input" accept="image/*" capture="environment" style="display:none" onchange="procesarFoto(event,'m')"/>
         </div>
         <div class="form-group"><label class="form-label">Nombre</label><input type="text" class="form-input" id="m-nombre"/></div>
         <div class="form-group"><label class="form-label">Dosis por Bote</label><input type="number" class="form-input" id="m-bote"/></div>
@@ -546,11 +549,13 @@
           <div class="foto-preview-wrap">
             <div id="f-foto-prev" class="foto-preview empty">📷</div>
             <div class="foto-actions">
-              <button class="btn-foto btn-foto-select" onclick="seleccionarFoto('f')">📷 Seleccionar foto</button>
+              <button class="btn-foto btn-foto-select" onclick="seleccionarFoto('f')">🖼️ Galería</button>
+              <button class="btn-foto btn-foto-camara" onclick="abrirCamara('f')">📸 Cámara</button>
               <button class="btn-foto btn-foto-del" id="f-foto-del-btn" style="display:none" onclick="borrarFoto('f')">🗑️ Quitar foto</button>
             </div>
           </div>
           <input type="file" id="f-foto-input" accept="image/*" style="display:none" onchange="procesarFoto(event,'f')"/>
+          <input type="file" id="f-foto-camara-input" accept="image/*" capture="environment" style="display:none" onchange="procesarFoto(event,'f')"/>
         </div>
         <div class="form-group"><label class="form-label">Nombre</label><input type="text" class="form-input" id="f-nombre" placeholder="Ej: Ibuprofeno 400mg"/></div>
         <div class="form-group"><label class="form-label">Dosis por Bote</label><input type="number" class="form-input" id="f-bote" placeholder="Ej: 30"/></div>

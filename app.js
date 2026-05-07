@@ -844,11 +844,20 @@ async function generarPDFPedido(numPedido, fecha, filas) {
     doc.rect(startX, y, 182, 8, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(9); doc.setFont('helvetica', 'bold');
-    let cx = startX + 2;
-    headers.forEach((h, i) => {
-      doc.text(h, cx, y + 5.5);
-      cx += cols[i];
-    });
+
+    // Calcular posiciones X acumuladas — igual que en las filas de datos
+    const xCol = [];
+    let acc = startX;
+    cols.forEach(c => { xCol.push(acc); acc += c; });
+
+    // Col 0 (Medicamento): alineado a la izquierda con padding
+    doc.text(headers[0], xCol[0] + 2, y + 5.5);
+    // Cols 1-3 (Pedir, Stock, Total): centradas igual que los datos
+    doc.text(headers[1], xCol[1] + cols[1]/2, y + 5.5, { align: 'center' });
+    doc.text(headers[2], xCol[2] + cols[2]/2, y + 5.5, { align: 'center' });
+    doc.text(headers[3], xCol[3] + cols[3]/2, y + 5.5, { align: 'center' });
+    // Col 4 (Meses/Días): alineado a la izquierda con padding
+    doc.text(headers[4], xCol[4] + 2, y + 5.5);
 
     // ── Filas ──
     y += 8;
@@ -1003,6 +1012,7 @@ function initSwipeGestures() {
 // ── Fotos ──
 let fotoTemporal={f:null,m:null};
 function seleccionarFoto(p){document.getElementById(p+'-foto-input')?.click();}
+function abrirCamara(p){document.getElementById(p+'-foto-camara-input')?.click();}
 function procesarFoto(ev,p){
   const f=ev.target.files[0];if(!f)return;
   const r=new FileReader();
@@ -1180,7 +1190,18 @@ function confirmarPedido(){
     const numPedido='PED-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+String(DB.get('nextPedidoId',1)).padStart(3,'0');
     localStorage.setItem('farrmacia_nextPedidoId',JSON.stringify(DB.get('nextPedidoId',1)+1));
     const fecha=new Date().toLocaleString('es-ES');
-    pedidoItems.forEach(it=>{if(it.qty<=0||!it.incluir_pedido)return;const i=meds.findIndex(m=>m.id===it.id);if(i<0)return;const ns=it.botesCalc+it.qty;meds[i].stock_real=ns;hist.push({id:nextId(),fecha,num_pedido:numPedido,medicamento:it.nombre,botes_pedidos:it.qty,botes_total:ns,dias_restantes_tras_pedido:it.tomaDia>0&&it.unidBote>0?Math.floor((it.dosisActuales+it.qty*it.unidBote)/it.tomaDia):0});});
+    const manana = new Date(); manana.setDate(manana.getDate()+1);
+    const fechaManana = manana.toISOString().split('T')[0];
+    pedidoItems.forEach(it=>{
+      if(it.qty<=0||!it.incluir_pedido)return;
+      const i=meds.findIndex(m=>m.id===it.id);
+      if(i<0)return;
+      const ns=it.botesCalc+it.qty;
+      meds[i].stock_real=ns;
+      // Actualizar fecha_inicio al día siguiente si el medicamento ya estaba iniciado
+      if(meds[i].fecha_inicio) meds[i].fecha_inicio=fechaManana;
+      hist.push({id:nextId(),fecha,num_pedido:numPedido,medicamento:it.nombre,botes_pedidos:it.qty,botes_total:ns,dias_restantes_tras_pedido:it.tomaDia>0&&it.unidBote>0?Math.floor((it.dosisActuales+it.qty*it.unidBote)/it.tomaDia):0});
+    });
     DB.set('meds',meds);DB.set('historial_pedidos',hist);
     showToast(`✅ Pedido ${numPedido} confirmado`);
     mostrarResumenPedido(numPedido,fecha,con);navigate('inventario');
