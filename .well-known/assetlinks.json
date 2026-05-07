@@ -7,4 +7,14 @@
       "38:BF:3D:79:8D:B2:80:C7:32:7A:32:A4:35:6A:57:A8:EF:A2:30:FA:22:21:CB:9E:4E:D3:7A:8C:1F:33:89:01"
     ]
   }
+},
+{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.antonioruiz.plazagaraje",
+    "sha256_cert_fingerprints": [
+      "38:BF:3D:79:8D:B2:80:C7:32:7A:32:A4:35:6A:57:A8:EF:A2:30:FA:22:21:CB:9E:4E:D3:7A:8C:1F:33:89:01"
+    ]
+  }
 }]
