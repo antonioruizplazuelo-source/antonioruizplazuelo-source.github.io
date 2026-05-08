@@ -62,6 +62,15 @@
     }
     #btn-sync.syncing { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    #btn-force-sync {
+      background: rgba(144,202,249,0.25); border: 1.5px solid rgba(144,202,249,0.5);
+      color: #E3F2FD; width: 36px; height: 36px; border-radius: 50%;
+      font-size: 16px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    #btn-force-sync:active { background: rgba(144,202,249,0.45); }
+    #btn-force-sync.syncing { animation: spin 1s linear infinite; }
 
     /* CONTENT — scroll horizontal tipo launcher */
     #content {
@@ -191,6 +200,7 @@
     .med-card:active { transform: scale(0.98); }
     .med-card-name { font-size: 15px; font-weight: 900; color: var(--azul-oscuro); }
     .med-card-info { font-size: 13px; color: var(--naranja); font-weight: 700; margin: 3px 0; }
+    .med-card-fecha-inicio { font-size: 12px; color: #5C9BD6; font-weight: 600; margin: 2px 0; }
     .med-card-obs  { font-size: 12px; color: var(--gris-texto); }
     .med-card-pedido { font-size: 12px; font-weight: 700; margin-top: 4px; }
     .med-card-pedido.incluido { color: var(--verde); }
@@ -376,6 +386,7 @@
       <div id="header-sub">Gestión de medicamentos</div>
     </div>
     <div id="header-right">
+      <button id="btn-force-sync" onclick="forzarSyncManual()" title="Forzar sincronización">☁️</button>
       <button id="btn-sync" onclick="abrirSyncPanel()" title="Sincronizar">🔄</button>
       <div id="header-clock"></div>
     </div>

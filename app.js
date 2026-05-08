@@ -582,6 +582,20 @@ async function syncFromFirebase(silencioso=false) {
   }
 }
 
+// ── Forzar sync manual desde botón ──
+async function forzarSyncManual() {
+  if (getModo() === 'local') { showToast('ℹ️ Modo local — sin Firebase', 'error'); return; }
+  const btn = document.getElementById('btn-force-sync');
+  if (btn) btn.classList.add('syncing');
+  try {
+    await syncToFirebase(false);
+  } catch(e) {
+    showToast('❌ Error al sincronizar', 'error');
+  } finally {
+    if (btn) btn.classList.remove('syncing');
+  }
+}
+
 // ── Auto-sync 5s tras cambio ──
 function scheduleAutoSync() {
   if (getModo()==='local') return; // modo local: no sincronizar
@@ -1178,6 +1192,8 @@ function renderInventario(){
       </div>
       <div class="progress-bar-wrap"><div class="progress-bar ${colorDias(s.diasRestantes)}" style="width:${pct}%"></div></div>
       <div class="med-card-info">⏳ ${s.iniciado?formatTiempo(s.diasRestantes):"▶️ Pulsa 'Iniciar'"}</div>
+      ${s.iniciado&&med.fecha_inicio?`<div class="med-card-fecha-inicio">📅 Inicio: ${new Date(med.fecha_inicio+'T00:00:00').toLocaleDateString('es-ES',{day:'2-digit',month:'short',year:'numeric'})}</div>`:''}
+
       <div class="med-card-pedido ${med.incluir_pedido?'incluido':'excluido'}">${med.incluir_pedido?'✅ Incluido en pedidos':'❌ Excluido de pedidos'}</div>
       ${med.observaciones?`<div class="med-card-obs">📝 ${med.observaciones}</div>`:''}
       <div class="med-card-actions">
