@@ -24,24 +24,26 @@ let authEmail = null;      // Email del usuario logueado
 let tokenExpiry = 0;       // Timestamp de expiración del token
 
 // Guardar/recuperar sesión entre recargas
-function guardarSesion(token, email, expiresIn) {
+function guardarSesion(token, email, expiresIn, refreshToken) {
   authToken = token;
   authEmail = email;
   tokenExpiry = Date.now() + (parseInt(expiresIn) - 60) * 1000;
   localStorage.setItem('farrmacia_auth_token', token);
   localStorage.setItem('farrmacia_auth_email', email);
   localStorage.setItem('farrmacia_auth_expiry', String(tokenExpiry));
+  if (refreshToken) localStorage.setItem('farrmacia_auth_refresh', refreshToken);
 }
 function cargarSesionGuardada() {
-  const token   = localStorage.getItem('farrmacia_auth_token');
-  const email   = localStorage.getItem('farrmacia_auth_email');
-  const expiry  = parseInt(localStorage.getItem('farrmacia_auth_expiry') || '0');
+  const token  = localStorage.getItem('farrmacia_auth_token');
+  const email  = localStorage.getItem('farrmacia_auth_email');
+  const expiry = parseInt(localStorage.getItem('farrmacia_auth_expiry') || '0');
   if (token && email && Date.now() < expiry) {
-    authToken  = token;
-    authEmail  = email;
+    authToken   = token;
+    authEmail   = email;
     tokenExpiry = expiry;
     return true;
   }
+  if (email) authEmail = email;
   return false;
 }
 function cerrarSesion() {
@@ -49,9 +51,40 @@ function cerrarSesion() {
   localStorage.removeItem('farrmacia_auth_token');
   localStorage.removeItem('farrmacia_auth_email');
   localStorage.removeItem('farrmacia_auth_expiry');
+  localStorage.removeItem('farrmacia_auth_refresh');
 }
 function estaLogueado() {
   return authToken && Date.now() < tokenExpiry;
+}
+
+// Renovar token sin pedir contraseña usando refreshToken
+async function renovarToken() {
+  const rt = localStorage.getItem('farrmacia_auth_refresh');
+  if (!rt) return false;
+  try {
+    const r = await fetch(
+      `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_CONFIG.apiKey}`,
+      { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ grant_type:'refresh_token', refresh_token:rt }) }
+    );
+    const j = await r.json();
+    if (!r.ok || !j.id_token) return false;
+    guardarSesion(j.id_token, authEmail || localStorage.getItem('farrmacia_auth_email'), j.expires_in, j.refresh_token);
+    console.log('Token renovado automaticamente');
+    return true;
+  } catch(e) { console.error('renovarToken:', e); return false; }
+}
+
+// Asegurar sesion valida antes de llamar a Firebase
+async function asegurarSesion() {
+  if (getModo() === 'local') return true;
+  if (estaLogueado()) return true;
+  const ok = await renovarToken();
+  if (!ok) {
+    mostrarPantallaLogin('Tu sesion ha expirado. Inicia sesion de nuevo.');
+    return false;
+  }
+  return true;
 }
 
 // Login con email + contraseña contra Firebase Auth REST API
@@ -76,7 +109,7 @@ async function loginFirebase(email, password) {
     const code = j.error?.message || 'ERROR_DESCONOCIDO';
     throw new Error(errores[code] || 'Error al iniciar sesión: ' + code);
   }
-  guardarSesion(j.idToken, j.email, j.expiresIn);
+  guardarSesion(j.idToken, j.email, j.expiresIn, j.refreshToken);
   return j;
 }
 
@@ -479,8 +512,11 @@ async function getFirebaseTimestamp() {
 // Los archivos del historial se incluyen como base64 en Firebase
 // (solo los que caben — máx ~800KB por archivo para no superar límite Firestore 1MB/doc)
 async function syncToFirebase(silencioso=false) {
-  if (getModo()==='local') return true; // modo local: no sincronizar
+  if (getModo()==='local') return true;
   if (syncInProgress) return false;
+  // Renovar token si ha expirado (sin pedir contraseña)
+  const sesionOk = await asegurarSesion();
+  if (!sesionOk) return false;
   syncInProgress=true;
   document.getElementById('btn-sync')?.classList.add('syncing');
   try {
@@ -533,8 +569,11 @@ async function syncToFirebase(silencioso=false) {
 
 // ── Descargar de Firebase ──
 async function syncFromFirebase(silencioso=false) {
-  if (getModo()==='local') return false; // modo local: no sincronizar
+  if (getModo()==='local') return false;
   if (syncInProgress) return false;
+  // Renovar token si ha expirado (sin pedir contraseña)
+  const sesionOk = await asegurarSesion();
+  if (!sesionOk) return false;
   syncInProgress=true;
   document.getElementById('btn-sync')?.classList.add('syncing');
   try {
@@ -607,8 +646,31 @@ function scheduleAutoSync() {
 // ── Polling Firebase cada 30s (para detectar cambios desde otro dispositivo) ──
 function iniciarPolling() {
   if (pollTimer) clearInterval(pollTimer);
+  
+  // Cada 10s: actualizar color botón sync y renovar token si va a expirar pronto
+  setInterval(async () => {
+    actualizarColorBtnSync();
+    // Renovar token proactivamente si expira en menos de 5 minutos
+    if (getModo()!=='local' && authToken && tokenExpiry > 0) {
+      const minutosRestantes = (tokenExpiry - Date.now()) / 60000;
+      if (minutosRestantes < 5 && minutosRestantes > 0) {
+        console.log('Renovando token proactivamente...');
+        await renovarToken();
+      }
+    }
+    // Si hay cambios pendientes y el token es válido, intentar sync
+    const pending = localStorage.getItem(dbKey('pendingSync'))==='true';
+    if (pending && !syncInProgress && getModo()!=='local') {
+      const sesionOk = await asegurarSesion();
+      if (sesionOk) await syncToFirebase(true);
+    }
+  }, 10000);
+
+  // Cada 30s: detectar cambios desde otro dispositivo
   pollTimer = setInterval(async () => {
     if (syncInProgress||getModo()==='local') return;
+    const sesionOk = await asegurarSesion();
+    if (!sesionOk) return;
     const tsFirebase = await getFirebaseTimestamp().catch(()=>null);
     if (!tsFirebase) return;
     const tsLocal = localStorage.getItem(dbKey('localModified'));
@@ -642,7 +704,7 @@ async function syncInteligente() {
       await syncToFirebase(true);
     }
   } catch(err) { console.error('syncInteligente:',err); }
-  finally { mostrarSpinnerInicio(false); }
+  finally { mostrarSpinnerInicio(false); actualizarColorBtnSync(); }
 }
 
 // ── Toast sync global (visible en cualquier pantalla) ──
@@ -668,20 +730,44 @@ function mostrarSpinnerInicio(mostrar) {
 
 function actualizarIndicadorSync(ok) {
   const bar = document.getElementById('sync-status-bar');
+  const btn = document.getElementById('btn-sync');
   if (!bar) return;
   if(getModo()==='local'){
     bar.style.display='flex';
     bar.textContent='💾 Modo local — sin sincronización en la nube';
     bar.style.background='#e8f5ff';bar.style.borderColor='#90caf9';bar.style.color='#1565c0';
+    if(btn){btn.style.background='rgba(255,255,255,0.2)';btn.title='Modo local';}
     return;
   }
-  if(!ok && !estaLogueado()){
-    // No mostrar error si simplemente no hay sesión activa todavía
-    bar.style.display='none'; return;
+  // Color del botón sync según estado
+  if(btn){
+    if(ok){
+      btn.style.background='rgba(255,255,255,0.2)';
+      btn.title='Sincronizado ✅';
+    } else {
+      // Naranja = cambios pendientes o error
+      btn.style.background='rgba(255,165,0,0.6)';
+      btn.title='Cambios pendientes ⚠️ — pulsa para sincronizar';
+    }
   }
   bar.style.display = ok ? 'none' : 'flex';
   bar.style.background='';bar.style.borderColor='';bar.style.color='';
-  bar.textContent='❌ Sin conexión — datos guardados localmente';
+  bar.textContent='⚠️ Cambios pendientes — pulsa 🔄 para sincronizar';
+}
+
+// Actualizar color botón sync periódicamente según estado pendingSync
+function actualizarColorBtnSync() {
+  const btn = document.getElementById('btn-sync');
+  if(!btn || getModo()==='local') return;
+  const pending = localStorage.getItem(dbKey('pendingSync'))==='true';
+  const tokenOk = estaLogueado() || localStorage.getItem('farrmacia_auth_refresh');
+  if(pending || !tokenOk){
+    btn.style.background='rgba(255,165,0,0.6)';
+    btn.title='Cambios pendientes ⚠️ — pulsa para sincronizar';
+  } else {
+    btn.style.background='rgba(255,255,255,0.2)';
+    btn.title='Sincronizado ✅';
+  }
 }
 
 function abrirSyncPanel() {
